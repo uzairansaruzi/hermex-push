@@ -15,8 +15,10 @@ with `hermes plugins enable hermex-push`, set `HERMEX_PUSH_RELAY_URL`, restart t
    `agent/turn_finalizer.py`, which invokes `on_session_end`. `invoke_hook` lazily discovers
    plugins, so hooks fire in any process that shares the Hermes home and has the plugin in
    `plugins.enabled`. Hermex's Bot connection runs through the Hermes Desktop backend
-   (`tui_gateway`), whose platform resolves to `desktop` or `tui`. The plugin maps
-   `desktop`/`tui` to `source: bot`, `webui` to `source: webui`, anything else to `other`.
+   (`tui_gateway`); its sessions carry the source the creating client declared, `ios` for
+   phone-created sessions (observed on the owner's host), `desktop` or `tui` for its own
+   surfaces. The plugin maps `ios`/`desktop`/`tui` to `source: bot`, `webui` to
+   `source: webui`, anything else (including `bot_room` group chats) to `other`.
    No plugin change is needed for [hermex#561](https://github.com/uzairansaruzi/hermex/issues/561).
    One caveat: the Desktop backend also fires `on_session_end` with `interrupted=True` when a
    socket drops; the plugin sends nothing for interrupted turns, so a turn never pushes twice.
@@ -32,6 +34,20 @@ with `hermes plugins enable hermex-push`, set `HERMEX_PUSH_RELAY_URL`, restart t
    observe every surface, so the plugin uses those. Questions come from `pre_tool_call` on the
    `clarify` tool. The `hermex` platform is loaded eagerly (only bundled platforms defer), so
    the hooks are live in every process.
+
+**Profiles.** Sessions run under a Hermes profile scope (`<root>/profiles/<name>`), and each
+profile has its own plugin directory, `plugins.enabled` list and `.env`. The plugin must be
+installed and enabled in every profile that should push (Cadu is installed the same way);
+the app's install flow in [hermex#557](https://github.com/uzairansaruzi/hermex/issues/557)
+has to target the profile the user runs. Keys live at the root so every profile pairs as one
+host, and a profile without `HERMEX_PUSH_RELAY_URL` inherits the root `.env` value.
+
+## Validated on the owner's host (2026-09-18, hermes-agent 0.21.3)
+
+CLI, webui and Bot turns each produced exactly one sealed `reply` plus `running`/`done`
+progress events against a local capture endpoint, alongside Cadu. The captured bodies
+contained ciphertext only. The pairing route answered 401 without a login and returned the
+keys through the dashboard login.
 
 ## What it sends
 
