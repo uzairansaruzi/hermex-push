@@ -18,7 +18,7 @@ from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from . import RELAY_URL_ENV
-from .keys import Keys, load_or_create_keys
+from .keys import Keys, hermes_root, load_or_create_keys
 from .payload import notify_event, preview, progress_event
 from .progress import HOLD_SECONDS, ProgressCoalescer, ProgressSnapshot
 from .relay import RelaySender, notify_url
@@ -31,17 +31,30 @@ INPUT_TOOLS = frozenset({"sudo", "secret"})  # V1.1: ``input`` pushes
 MAX_TRACKED_SESSIONS = 512
 
 
+def _root_dotenv_value(key: str) -> str:
+    """``KEY=VALUE`` from ``<hermes root>/.env``; profiles inherit the host's relay URL."""
+    try:
+        for line in (hermes_root() / ".env").read_text(encoding="utf-8").splitlines():
+            name, sep, value = line.strip().partition("=")
+            if sep and name.strip() == key:
+                return value.strip().strip("\'\"")
+    except Exception:
+        pass
+    return ""
+
+
 def relay_url_from_env() -> str:
     """``HERMEX_PUSH_RELAY_URL`` resolved the way hermes-agent resolves any managed credential:
-    the active profile scope, then the process environment, then ``<hermes_home>/.env``. The
-    last step matters for hosts such as hermes-webui that never export the Hermes ``.env``.
-    Read on every send so a value set after startup still works."""
+    the active profile scope, then the process environment, then the active home's ``.env``
+    (the step hosts such as hermes-webui need, since they never export the Hermes ``.env``).
+    A profile without its own value falls back to the root ``.env``. Read on every send so a
+    value set after startup still works."""
     try:
         from hermes_cli.config import get_env_value
         value = get_env_value(RELAY_URL_ENV)
     except Exception:
         value = os.environ.get(RELAY_URL_ENV, "")
-    return (value or "").strip()
+    return (value or "").strip() or _root_dotenv_value(RELAY_URL_ENV)
 
 
 class _Recent(OrderedDict):

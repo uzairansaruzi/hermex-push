@@ -1,6 +1,6 @@
 """Install and preview keys, created once and never rotated behind a paired device.
 
-Both live in ``<hermes_home>/plugins/hermex-push/`` (the path pinned in hermex#490), mode 0600,
+Both live in ``<hermes root>/plugins/hermex-push/`` (the path pinned in hermex#490), mode 0600,
 created under a file lock so two gateway processes starting together agree on one key.
 
 - ``install_key``: 64 hex chars. The relay capability; the phone sends it on every relay call.
@@ -23,17 +23,20 @@ PREVIEW_KEY_BYTES = 32
 INSTALL_KEY_HEX_CHARS = 64
 
 
-def hermes_home() -> Path:
-    """Active Hermes home: hermes-agent's resolver when importable, else ``HERMES_HOME``, else ``~/.hermes``."""
+def hermes_root() -> Path:
+    """The root Hermes home, never a profile home. Sessions run under a profile scope
+    (``HERMES_HOME=<root>/profiles/<name>``) and each profile installs its own copy of the plugin,
+    but one host pairs with one phone, so every profile must share the same keys."""
     try:
-        from hermes_constants import get_hermes_home
-        return Path(get_hermes_home())
+        from hermes_constants import get_default_hermes_root
+        return Path(get_default_hermes_root())
     except Exception:
-        return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes").expanduser()
+        home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes").expanduser()
+        return home.parents[1] if home.parent.name == "profiles" else home
 
 
 def key_dir(home: Path | None = None) -> Path:
-    return (home or hermes_home()) / "plugins" / PLUGIN_NAME
+    return (home or hermes_root()) / "plugins" / PLUGIN_NAME
 
 
 @dataclass(frozen=True)

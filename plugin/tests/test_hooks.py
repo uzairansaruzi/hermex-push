@@ -117,3 +117,14 @@ def test_nothing_is_sent_without_a_relay_url_or_keys(keys, sender):
     p = HermexPush(sender=sender, keys_loader=broken, relay_url=lambda: "https://r", schedule=lambda d, f: None)
     run_turn(p)
     assert sender.events == []
+
+
+def test_profile_without_its_own_relay_url_inherits_the_root_dotenv(hermes_home, monkeypatch):
+    from hermex_push.hooks import relay_url_from_env
+    (hermes_home / ".env").write_text("OTHER=1\nHERMEX_PUSH_RELAY_URL=https://root.test/\n")
+    profile = hermes_home / "profiles" / "dev"
+    profile.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_HOME", str(profile))
+    assert relay_url_from_env() == "https://root.test/"
+    monkeypatch.setenv("HERMEX_PUSH_RELAY_URL", "https://env.test")
+    assert relay_url_from_env() == "https://env.test"
