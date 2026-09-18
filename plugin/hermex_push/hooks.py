@@ -32,11 +32,13 @@ MAX_TRACKED_SESSIONS = 512
 
 
 def relay_url_from_env() -> str:
-    """``HERMEX_PUSH_RELAY_URL`` from the profile's secret scope when hermes-agent is importable,
-    else the process environment. Read on every send so a value set after startup still works."""
+    """``HERMEX_PUSH_RELAY_URL`` resolved the way hermes-agent resolves any managed credential:
+    the active profile scope, then the process environment, then ``<hermes_home>/.env``. The
+    last step matters for hosts such as hermes-webui that never export the Hermes ``.env``.
+    Read on every send so a value set after startup still works."""
     try:
-        from gateway.platforms._shared import get_scoped_secret
-        value = get_scoped_secret(RELAY_URL_ENV, "")
+        from hermes_cli.config import get_env_value
+        value = get_env_value(RELAY_URL_ENV)
     except Exception:
         value = os.environ.get(RELAY_URL_ENV, "")
     return (value or "").strip()
