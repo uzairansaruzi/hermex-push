@@ -4,7 +4,7 @@ from hermex_push.sources import coarse_source, should_notify
 
 
 @pytest.mark.parametrize("platform,expected", [
-    ("desktop", "bot"), ("tui", "bot"), ("webui", "webui"), ("cli", "other"), ("", "other"), (None, "other"),
+    ("ios", "bot"), ("desktop", "bot"), ("tui", "bot"), ("bot_room", "other"), ("webui", "webui"), ("cli", "other"), ("", "other"), (None, "other"),
 ])
 def test_coarse_source(platform, expected):
     assert coarse_source(platform) == expected

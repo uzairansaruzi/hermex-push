@@ -1,14 +1,16 @@
 """Which sessions get a push, and the coarse ``source`` every payload carries.
 
 ``platform`` is the agent's platform string. Hermex's Bot connection runs through the Hermes
-Desktop backend, which resolves to ``desktop`` (chat panel) or ``tui``; hermes-webui constructs
-its agents with ``platform="webui"``. Chat platforms that already notify natively are skipped, as
+Desktop backend, whose sessions carry the source the creating client declared: ``ios`` for
+sessions phone clients created (observed on the owner's host for a Hermex Bot turn), ``desktop``
+or ``tui`` for its own surfaces; hermes-webui constructs its agents with ``platform="webui"``.
+Group rooms (``bot_room``) and other clients stay ``other``. Chat platforms that already notify natively are skipped, as
 are cron and kanban sessions, which never have a human waiting on a phone.
 """
 
 from __future__ import annotations
 
-BOT_PLATFORMS = frozenset({"desktop", "tui"})
+BOT_PLATFORMS = frozenset({"ios", "desktop", "tui"})
 WEBUI_PLATFORMS = frozenset({"webui"})
 
 # Platforms whose own client already delivers notifications (built-in enum values plus the

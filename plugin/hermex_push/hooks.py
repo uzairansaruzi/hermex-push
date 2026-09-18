@@ -178,10 +178,14 @@ class HermexPush:
     def pre_llm_call(self, *, session_id: str = "", platform: str = "", **_: Any) -> None:
         try:
             with self._lock:
+                first_sight = session_id not in self._platform_by_session
                 if platform:
                     self._platform_by_session.remember(session_id, platform)
                 self._reply_by_session.pop(session_id, None)
                 snapshot = self._progress.turn_started(session_id, self._now())
+            if first_sight:  # ids and platform only, never content
+                logger.info("hermex-push: session %s platform=%r source=%s", session_id, platform,
+                            coarse_source(platform))
             self._emit_progress(snapshot)
         except Exception:
             logger.debug("hermex-push: pre_llm_call failed", exc_info=True)
