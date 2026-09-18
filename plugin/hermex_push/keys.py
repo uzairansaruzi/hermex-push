@@ -1,7 +1,10 @@
 """Install and preview keys, created once and never rotated behind a paired device.
 
-Both live in ``<hermes root>/plugins/hermex-push/`` (the path pinned in hermex#490), mode 0600,
-created under a file lock so two gateway processes starting together agree on one key.
+Both live in ``<hermes root>/plugin-data/hermex-push/`` (hermes-agent's per-plugin state
+convention), mode 0600, created under a file lock so two gateway processes starting together
+agree on one key. hermex#490 first pinned them inside the plugin's install directory, but
+``hermes plugins install --force`` swaps that directory and ``remove`` deletes it, which would
+unpair every phone; keys found there are migrated on first use.
 
 - ``install_key``: 64 hex chars. The relay capability; the phone sends it on every relay call.
 - ``preview_key``: 32 raw bytes. AES-256-GCM key for sealed previews; the phone's Notification
@@ -36,7 +39,23 @@ def hermes_root() -> Path:
 
 
 def key_dir(home: Path | None = None) -> Path:
+    return (home or hermes_root()) / "plugin-data" / PLUGIN_NAME
+
+
+def legacy_key_dir(home: Path | None = None) -> Path:
+    """Where the first release kept the keys: inside the plugin install directory."""
     return (home or hermes_root()) / "plugins" / PLUGIN_NAME
+
+
+def _migrate_legacy_keys(directory: Path, legacy: Path) -> None:
+    """Move an existing key pair out of the install directory so a reinstall cannot wipe it.
+    Only a complete legacy pair moves, and never over keys that already exist."""
+    names = ("install_key", "preview_key")
+    if any((directory / n).exists() for n in names) or not all((legacy / n).exists() for n in names):
+        return
+    for name in names:
+        os.replace(legacy / name, directory / name)
+        os.chmod(directory / name, 0o600)
 
 
 @dataclass(frozen=True)
@@ -78,6 +97,7 @@ def load_or_create_keys(home: Path | None = None) -> Keys:
     with open(directory / ".keys.lock", "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
+            _migrate_legacy_keys(directory, legacy_key_dir(home))
             install = _read_or_create(
                 directory / "install_key", lambda: secrets.token_hex(INSTALL_KEY_HEX_CHARS // 2).encode("ascii")
             ).decode("ascii").strip()

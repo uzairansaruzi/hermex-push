@@ -84,8 +84,10 @@ Progress carries the tool's name only, never arguments or results.
 `GET /api/plugins/hermex-push/pairing` (dashboard auth) returns
 `{"relay_url", "install_key", "preview_key", "platform": "hermex", "payload_version": 1}`.
 `preview_key` is base64 of 32 bytes. Both keys are generated on first use under a file lock at
-`<hermes_home>/plugins/hermex-push/{install_key,preview_key}` (mode 0600) and never rotated
-behind a paired device. The route answers 409 while `HERMEX_PUSH_RELAY_URL` is unset.
+`<hermes root>/plugin-data/hermex-push/{install_key,preview_key}` (mode 0600) and never rotated
+behind a paired device. They live outside the plugin's install directory so `hermes plugins
+update`, a forced reinstall or `remove` cannot unpair a phone; keys from the first release's
+location inside the install directory are migrated on first use. The route answers 409 while `HERMEX_PUSH_RELAY_URL` is unset.
 
 ## Layout
 
