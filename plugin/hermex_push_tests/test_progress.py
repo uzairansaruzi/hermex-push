@@ -33,3 +33,14 @@ def test_sessions_are_independent():
     assert c.tool_started("a", "terminal", 0.2) is None
     assert c.turn_ended("b", 0.3, failed=False).session_id == "b"
     assert [s.session_id for s in c.due(1.5)] == ["a"]
+
+
+def test_sessions_that_never_end_are_bounded_and_stale_ones_forgotten():
+    from hermex_push.progress import MAX_SESSIONS, STALE_SECONDS
+    c = ProgressCoalescer()
+    for i in range(MAX_SESSIONS + 100):
+        c.tool_started(f"s{i}", "terminal", float(i))
+    assert len(c._sessions) <= MAX_SESSIONS
+    assert "s0" not in c._sessions
+    c.due(float(MAX_SESSIONS + 100) + STALE_SECONDS)
+    assert c._sessions == {}

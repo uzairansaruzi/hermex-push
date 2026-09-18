@@ -32,3 +32,13 @@ def test_keyed_ids_are_stable_and_label_scoped(keys):
     assert a != keyed_id("collapse", "sess-1", install_key=keys.install_key)
     assert a != keyed_id("thread", "sess-1", install_key="cd" * 32)
     assert len(a) == 32 and "sess" not in a
+
+
+def test_fixture_vector_decrypts():
+    """The vector hermex#559's Notification Service Extension tests decrypt as well."""
+    import base64, json
+    from pathlib import Path
+    vec = json.loads((Path(__file__).parent / "fixtures" / "sealed_preview.json").read_text())
+    key = base64.b64decode(vec["preview_key_b64"])
+    assert preview_aad(vec["install_key"]).decode() == vec["aad"]
+    assert unseal(vec["sealed"], preview_key=key, install_key=vec["install_key"]) == vec["preview"]

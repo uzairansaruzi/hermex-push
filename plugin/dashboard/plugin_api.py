@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 
 _ROOT = str(Path(__file__).resolve().parents[1])
 if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
+    sys.path.append(_ROOT)
 
 from hermex_push import PLATFORM_NAME, RELAY_URL_ENV  # noqa: E402
 from hermex_push.hooks import relay_url_from_env  # noqa: E402

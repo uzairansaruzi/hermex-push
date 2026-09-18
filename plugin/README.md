@@ -18,7 +18,9 @@ with `hermes plugins enable hermex-push`, set `HERMEX_PUSH_RELAY_URL`, restart t
    (`tui_gateway`); its sessions carry the source the creating client declared, `ios` for
    phone-created sessions (observed on the owner's host), `desktop` or `tui` for its own
    surfaces. The plugin maps `ios`/`desktop`/`tui` to `source: bot`, `webui` to
-   `source: webui`, anything else (including `bot_room` group chats) to `other`.
+   `source: webui`, anything else (including `bot_room` group chats) to `other`. A session whose
+   platform the turn hooks never named gets nothing (fail closed), so an evicted chat-platform
+   session cannot be pushed to the phone by mistake.
    No plugin change is needed for [hermex#561](https://github.com/uzairansaruzi/hermex/issues/561).
    One caveat: the Desktop backend also fires `on_session_end` with `interrupted=True` when a
    socket drops; the plugin sends nothing for interrupted turns, so a turn never pushes twice.
@@ -92,6 +94,11 @@ behind a paired device. The route answers 409 while `HERMEX_PUSH_RELAY_URL` is u
   `sources.py` coarse source and skip rules; `progress.py` coalescing; `relay.py` background POST;
   `hooks.py` hook callbacks; `adapter.py` the send-only platform adapter.
 - `dashboard/plugin_api.py` the pairing route; `dashboard/dist/index.js` a no-op the SPA requires.
+- `hermex_push_tests/` pytest suite; `fixtures/sealed_preview.json` is a fixed-key vector the
+  phone's Notification Service Extension tests can decrypt as well.
+
+`HERMEX_PUSH_RELAY_URL` must be https; plain http is accepted only to loopback (local capture),
+because the install key travels in the URL path. Redirects from the relay are refused.
 
 Cron `deliver: hermex` and the `input`, `delivery` and `system` kinds are V1.1
 ([hermex#566](https://github.com/uzairansaruzi/hermex/issues/566)).

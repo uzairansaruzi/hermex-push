@@ -11,10 +11,12 @@ import sys
 from pathlib import Path
 
 # The dashboard imports its API file standalone, so shared code is a package imported by name
-# from the plugin root (see hermex_push/__init__.py).
+# from the plugin root (see hermex_push/__init__.py). Appended, never prepended: nothing in
+# here may shadow a host module. With the plugin installed in several profiles the first copy
+# imported serves every scope in that process; restart after upgrading.
 _ROOT = str(Path(__file__).resolve().parent)
 if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
+    sys.path.append(_ROOT)
 
 from hermex_push import PLATFORM_NAME, RELAY_URL_ENV  # noqa: E402
 from hermex_push.adapter import (  # noqa: E402
@@ -22,12 +24,9 @@ from hermex_push.adapter import (  # noqa: E402
 )
 from hermex_push.hooks import HermexPush  # noqa: E402
 
-_push: HermexPush | None = None
-
 
 def register(ctx) -> None:
-    """Plugin entry point called by the Hermes plugin system."""
-    global _push
+    """Plugin entry point called by the Hermes plugin system, once per profile scope."""
     ctx.register_platform(
         name=PLATFORM_NAME, label="Hermex", adapter_factory=make_adapter, check_fn=check_requirements,
         is_connected=is_connected, required_env=[RELAY_URL_ENV],
@@ -39,6 +38,8 @@ def register(ctx) -> None:
         profile = str(getattr(ctx, "profile_name", "") or "")
     except Exception:
         pass
-    _push = HermexPush(profile=profile)
-    for hook_name, callback in _push.hook_callbacks().items():
+    push = HermexPush(profile=profile)
+    for hook_name, callback in push.hook_callbacks().items():
         ctx.register_hook(hook_name, callback)
+    if callable(getattr(ctx, "on_unload", None)):
+        ctx.on_unload(push.close)

@@ -33,6 +33,9 @@ class FakeCtx:
     def register_hook(self, name, callback):
         self.hooks[name] = callback
 
+    def on_unload(self, callback):
+        self.unload = callback
+
 
 def test_install_identifier_and_manifest_names_agree():
     git_url, _, subdir = INSTALL_IDENTIFIER.partition(".git/")
@@ -51,6 +54,7 @@ def test_register_declares_platform_and_every_manifest_hook():
     assert ctx.platform["pii_safe"] is True
     declared = set(yaml.safe_load((ROOT / "plugin.yaml").read_text())["provides_hooks"])
     assert set(ctx.hooks) == declared
+    ctx.unload()  # registered and callable
 
 
 def test_pairing_route_returns_keys_only_with_a_relay_url(hermes_home, monkeypatch):

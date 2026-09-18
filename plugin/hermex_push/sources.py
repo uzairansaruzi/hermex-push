@@ -36,6 +36,9 @@ def coarse_source(platform: str | None) -> str:
 
 
 def should_notify(session_id: str | None, platform: str | None) -> bool:
+    """Fail closed: a session whose platform is unknown could be a chat platform that already
+    notified the user, so it gets nothing until a turn hook names its platform."""
     if not session_id or session_id.startswith(SKIPPED_SESSION_PREFIXES):
         return False
-    return (platform or "").strip().lower() not in NATIVE_NOTIFY_PLATFORMS
+    name = (platform or "").strip().lower()
+    return bool(name) and name not in NATIVE_NOTIFY_PLATFORMS

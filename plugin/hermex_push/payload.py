@@ -37,12 +37,26 @@ SUBTITLE_CHARS = 120
 BODY_CHARS = 400
 
 
-def _clip(text: Optional[str], limit: int) -> str:
-    text = " ".join((text or "").split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+def _as_text(value: Any) -> str:
+    """Hook payloads are not always strings: a multimodal user message is a list of parts."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return " ".join(
+            _as_text(part.get("text") if isinstance(part, dict) else part) for part in value
+            if not isinstance(part, dict) or part.get("type", "text") == "text"
+        )
+    if isinstance(value, dict):
+        return _as_text(value.get("text") or value.get("content") or "")
+    return "" if value is None else str(value)
 
 
-def preview(*, title: str, body: str, profile: str, subtitle: str = "", request_id: str = "") -> dict[str, str]:
+def _clip(text: Any, limit: int) -> str:
+    text = " ".join(_as_text(text).split())
+    return text if len(text) <= limit else text[: limit - 1] + "\u2026"
+
+
+def preview(*, title: Any, body: Any, profile: str, subtitle: Any = "", request_id: str = "") -> dict[str, str]:
     return {
         "title": _clip(title, TITLE_CHARS),
         "subtitle": _clip(subtitle, SUBTITLE_CHARS),

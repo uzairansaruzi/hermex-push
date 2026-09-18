@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 HOLD_SECONDS = 1.0
+MAX_SESSIONS = 512
+STALE_SECONDS = 15 * 60  # a session silent this long is forgotten; matches the activity stale date
 
 
 @dataclass
@@ -46,6 +48,7 @@ class ProgressCoalescer:
                 tool: Optional[str] = None, count_call: bool = False) -> Optional[ProgressSnapshot]:
         state = self._sessions.get(session_id)
         if state is None:
+            self._evict(now)
             state = self._sessions[session_id] = SessionProgress(started_at=now)
             status_changed = True
         else:
@@ -60,9 +63,19 @@ class ProgressCoalescer:
         state.pending = True
         return None
 
+    def _evict(self, now: float) -> None:
+        """Forget stale sessions, then the oldest ones past the cap. Agents that never reach
+        ``on_session_end`` (persist-disabled forks) would otherwise accumulate forever."""
+        for sid, state in list(self._sessions.items()):
+            if now - max(state.last_emit, state.started_at) >= STALE_SECONDS:
+                self._sessions.pop(sid, None)
+        while len(self._sessions) >= MAX_SESSIONS:
+            self._sessions.pop(next(iter(self._sessions)), None)
+
     def turn_started(self, session_id: str, now: float) -> Optional[ProgressSnapshot]:
         state = self._sessions.get(session_id)
         if state is None or state.status in ("done", "failed"):
+            self._evict(now)
             self._sessions[session_id] = SessionProgress(started_at=now)
             return self._snapshot(session_id, self._sessions[session_id], now)
         return self._update(session_id, now, status="running")
@@ -88,6 +101,7 @@ class ProgressCoalescer:
 
     def due(self, now: float) -> list[ProgressSnapshot]:
         """Held routine updates whose hold window has passed."""
+        self._evict(now)
         out = []
         for session_id, state in self._sessions.items():
             if state.pending and now - state.last_emit >= HOLD_SECONDS:

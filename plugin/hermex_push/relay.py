@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable, Optional
+from urllib.parse import urlsplit
 
 logger = logging.getLogger("hermex_push")
 
@@ -20,10 +21,30 @@ TIMEOUT_SECONDS = 10.0
 RETRY_DELAY_SECONDS = 2.0
 
 PostFn = Callable[[str, bytes], int]  # (url, body) -> HTTP status
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_STOP = object()
+
+
+def allowed_relay_url(url: str) -> bool:
+    """https anywhere, or http to loopback only: the install key travels in the URL path."""
+    parts = urlsplit(url)
+    if parts.scheme == "https":
+        return bool(parts.hostname)
+    return parts.scheme == "http" and (parts.hostname or "") in _LOOPBACK_HOSTS
 
 
 def notify_url(relay_url: str, install_key: str) -> str:
     return f"{relay_url.rstrip('/')}/installs/{install_key}/notify"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would replay the install key to whatever host the relay names; refuse."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
 
 
 def _urllib_post(url: str, body: bytes) -> int:
@@ -32,7 +53,7 @@ def _urllib_post(url: str, body: bytes) -> int:
         headers={"Content-Type": "application/json", "User-Agent": "hermex-push-plugin/0.1"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        with _opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             return response.status
     except urllib.error.HTTPError as exc:
         return exc.code
@@ -44,7 +65,7 @@ class RelaySender:
     def __init__(self, post: PostFn = _urllib_post, *, sleep: Callable[[float], None] = time.sleep) -> None:
         self._post = post
         self._sleep = sleep
-        self._queue: "queue.Queue[tuple[str, dict[str, Any]]]" = queue.Queue(maxsize=QUEUE_LIMIT)
+        self._queue: "queue.Queue[Any]" = queue.Queue(maxsize=QUEUE_LIMIT)
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
@@ -63,9 +84,22 @@ class RelaySender:
                 self._thread = threading.Thread(target=self._drain, name="hermex-push-relay", daemon=True)
                 self._thread.start()
 
+    def close(self) -> None:
+        """Stop the drain thread after the queued events; safe to call more than once."""
+        with self._lock:
+            thread = self._thread
+        if thread is None or not thread.is_alive():
+            return
+        self._queue.put(_STOP)
+        thread.join(timeout=TIMEOUT_SECONDS)
+
     def _drain(self) -> None:
         while True:
-            url, event = self._queue.get()
+            item = self._queue.get()
+            if item is _STOP:
+                self._queue.task_done()
+                return
+            url, event = item
             try:
                 self.deliver(url, event)
             except Exception:
