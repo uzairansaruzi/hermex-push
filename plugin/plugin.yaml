@@ -1,0 +1,32 @@
+name: hermex-push
+label: Hermex
+kind: platform
+version: 0.1.0
+description: >
+  Push notifications for the Hermex iPhone app. On each turn boundary the
+  plugin posts a sealed event (AES-256-GCM, encrypted on this host) to a
+  hermex-push relay, which fans it out to paired phones over APNs. Plaintext
+  never leaves the machine. Pairing is one authenticated dashboard call:
+  GET /api/plugins/hermex-push/pairing.
+author: Uzair Ansar
+homepage: https://github.com/uzairansaruzi/hermex-push
+license: MIT
+requires_hermes: ">=0.21.2"
+# Surfaced in `hermes config` via the platform-plugin env injector.
+requires_env:
+  - name: HERMEX_PUSH_RELAY_URL
+    description: "Base URL of the hermex-push relay (e.g. https://push.example.com)"
+    prompt: "hermex-push relay URL"
+    password: false
+provides_hooks:
+  - pre_llm_call
+  - post_llm_call
+  - on_session_end
+  - pre_tool_call
+  - post_tool_call
+  - pre_approval_request
+  - post_approval_response
+  - subagent_start
+# Validated and surfaced only; hermes-agent already pins cryptography.
+python_dependencies:
+  - cryptography

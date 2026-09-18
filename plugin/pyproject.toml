@@ -1,0 +1,12 @@
+[project]
+name = "hermex-push-plugin"
+version = "0.1.0"
+description = "hermes-agent platform plugin that sends sealed push events to a hermex-push relay"
+requires-python = ">=3.10"
+dependencies = ["cryptography>=42"]
+
+[project.optional-dependencies]
+dev = ["pytest", "fastapi", "httpx"]
+
+[tool.pytest.ini_options]
+testpaths = ["hermex_push_tests"]

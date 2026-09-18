@@ -1,0 +1,10 @@
+{
+  "name": "hermex-push",
+  "label": "Hermex Push",
+  "description": "Pairing endpoint for the Hermex iPhone app. No dashboard tab.",
+  "icon": "Smartphone",
+  "version": "0.1.0",
+  "tab": { "hidden": true },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}
