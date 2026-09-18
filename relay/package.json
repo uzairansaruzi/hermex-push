@@ -1,0 +1,27 @@
+{
+  "name": "hermex-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "deploy:dry-run": "wrangler deploy --dry-run",
+    "deploy": "sh scripts/deploy.sh"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.1.13",
+    "@cloudflare/workers-types": "^5.20260918.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.135.0"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}
