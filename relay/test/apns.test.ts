@@ -46,10 +46,11 @@ it('uses versioned activity state, stale dates, end events, and the activity top
 
 it.each(['sandbox', 'production'] as const)('sends to %s with APNs headers and no redirects', async environment => {
   const { sender } = await signingPair();
-  const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+  // Build the Request for real: workerd throws on init values it does not support, which a bare stub hides.
+  const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => { new Request(input, init); return new Response(null, { status: 200 }); });
   const push = activityPush(progress, { ...device, environment, bundle_id: 'com.uzairansar.hermesmobile.branch' }, 'token', '5', 5000);
   expect(await sender.send(push)).toBe('sent');
-  expect(fetch).toHaveBeenCalledWith(`https://${environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com'}/3/device/token`, expect.objectContaining({ redirect: 'error', headers: expect.objectContaining({ 'apns-topic': 'com.uzairansar.hermesmobile.branch.push-type.liveactivity', 'apns-priority': '5', 'apns-push-type': 'liveactivity', authorization: expect.stringMatching(/^bearer /) }) }));
+  expect(fetch).toHaveBeenCalledWith(`https://${environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com'}/3/device/token`, expect.objectContaining({ redirect: 'manual', headers: expect.objectContaining({ 'apns-topic': 'com.uzairansar.hermesmobile.branch.push-type.liveactivity', 'apns-priority': '5', 'apns-push-type': 'liveactivity', authorization: expect.stringMatching(/^bearer /) }) }));
 });
 
 it.each([
