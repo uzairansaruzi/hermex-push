@@ -39,7 +39,8 @@ export class ApnsSender {
   async send(push: Push): Promise<SendResult> {
     try {
       const response = await fetch(`https://${push.environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com'}/3/device/${push.token}`, {
-        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000),
+        // workerd rejects redirect: 'error'; 'manual' never follows and a 3xx falls through to 'rejected'.
+        method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(5000),
         headers: {
           authorization: `bearer ${await this.authorization()}`, 'content-type': 'application/json',
           'apns-topic': push.topic, 'apns-push-type': push.type, 'apns-priority': push.priority,
