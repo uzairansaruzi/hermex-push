@@ -23,6 +23,7 @@ from hermex_push.adapter import (  # noqa: E402
     PLATFORM_HINT, check_requirements, env_enablement, is_connected, make_adapter,
 )
 from hermex_push.hooks import HermexPush  # noqa: E402
+from hermex_push.scopes import serve_every_profile_in_host  # noqa: E402
 
 
 def register(ctx) -> None:
@@ -41,5 +42,9 @@ def register(ctx) -> None:
     push = HermexPush(profile=profile)
     for hook_name, callback in push.hook_callbacks().items():
         ctx.register_hook(hook_name, callback)
+    # The first copy loaded in a process also serves every profile without its own copy.
+    undo = serve_every_profile_in_host()
     if callable(getattr(ctx, "on_unload", None)):
         ctx.on_unload(push.close)
+        if undo is not None:
+            ctx.on_unload(undo)
