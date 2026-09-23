@@ -74,11 +74,12 @@ The iOS activity's Codable content state must match this wire shape (the iOS imp
   "status": "running",
   "tool": "terminal",
   "tool_calls": 3,
-  "started_at": 1800000000
+  "started_at": 1800000000,
+  "updated_at": 1800000042
 }
 ```
 
-Times are Unix seconds, status remains a string, tool is nullable. The phone should tolerate unknown versions/statuses. The relay retains a short completion marker because the plugin emits the end update before its reply. Deleting an ended activity erases its token but retains that marker; a new turn clears it. A subsequent turn needs a fresh phone-created activity/token. Deleting an active activity cancels pending progress and restores banners immediately.
+Times are Unix seconds, status remains a string, tool is nullable. `updated_at` is when the relay sent this state, so the widget can say how fresh it is; ActivityKit does not expose the APNs `timestamp` to the widget. The phone should tolerate unknown versions/statuses. The relay retains a short completion marker because the plugin emits the end update before its reply. Deleting an ended activity erases its token but retains that marker; a new turn clears it. A subsequent turn needs a fresh phone-created activity/token. Deleting an active activity cancels pending progress and restores banners immediately.
 
 Event receipts are reserved before sending, preventing concurrent or post-restart replays from repeating confirmed recipients. Like any external push API, there is no transaction spanning storage and APNs: a crash after reservation can lose a push, and a network timeout after Apple accepted a request can make a retry ambiguous. This is not an exactly-once delivery guarantee. Held progress gets up to two alarm retries; later status changes supersede stale held progress. APNs acceptance also does not prove device display.
 

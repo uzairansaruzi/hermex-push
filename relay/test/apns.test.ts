@@ -41,7 +41,7 @@ it('builds generic banners containing ciphertext and routing metadata only', asy
 it('uses versioned activity state, stale dates, end events, and the activity topic', () => {
   const push = activityPush({ ...progress, status: 'done' }, device, 'token', '10', 5000);
   expect(push.topic).toBe('com.uzairansar.hermesmobile.push-type.liveactivity');
-  expect(push.payload).toEqual({ aps: { timestamp: 5000, event: 'end', 'stale-date': 5900, 'content-state': { v: 1, status: 'done', tool: 'terminal', tool_calls: 1, started_at: progress.started_at } } });
+  expect(push.payload).toEqual({ aps: { timestamp: 5000, event: 'end', 'stale-date': 5900, 'content-state': { v: 1, status: 'done', tool: 'terminal', tool_calls: 1, started_at: progress.started_at, updated_at: 5000 } } });
 });
 
 it.each(['sandbox', 'production'] as const)('sends to %s with APNs headers and no redirects', async environment => {
