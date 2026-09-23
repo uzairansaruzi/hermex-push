@@ -38,11 +38,17 @@ with `hermes plugins enable hermex-push`, set `HERMEX_PUSH_RELAY_URL`, restart t
    the hooks are live in every process.
 
 **Profiles.** Sessions run under a Hermes profile scope (`<root>/profiles/<name>`), and each
-profile has its own plugin directory, `plugins.enabled` list and `.env`. The plugin must be
-installed and enabled in every profile that should push (Cadu is installed the same way);
-the app's install flow in [hermex#557](https://github.com/uzairansaruzi/hermex/issues/557)
-has to target the profile the user runs. Keys live at the root so every profile pairs as one
-host, and a profile without `HERMEX_PUSH_RELAY_URL` inherits the root `.env` value.
+profile has its own plugin directory, `plugins.enabled` list and `.env`. hermes-agent discovers
+a profile's plugins once, on first use, so a per-profile install only takes effect after the
+backend restarts. Instead, one install serves every profile in the same process
+(`hermex_push/scopes.py`, [hermex#634](https://github.com/uzairansaruzi/hermex/issues/634)):
+the first copy loaded wraps `PluginManager.invoke_hook` and `has_hook` and pushes for any
+profile without its own copy, under that profile's name. That covers the dashboard backend the
+Bot connection uses and hermes-webui, including profiles created later; a profile run in its own
+process (`hermes -p <name>` in a terminal) still needs its own install. These are hermes-agent
+internals: on a host without them the plugin logs one warning and only profiles with their own
+copy push. Keys live at the root so every profile pairs as one host, and a profile without
+`HERMEX_PUSH_RELAY_URL` inherits the root `.env` value.
 
 ## Validated on the owner's host (2026-09-18, hermes-agent 0.21.3)
 

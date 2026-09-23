@@ -30,6 +30,11 @@ from .sources import coarse_source, should_notify
 logger = logging.getLogger("hermex_push")
 
 CLARIFY_TOOL = "clarify"
+# The hermes-agent hooks this plugin observes; each is a same-named ``HermexPush`` method.
+HOOK_NAMES = (
+    "pre_llm_call", "post_llm_call", "on_session_end", "pre_tool_call", "post_tool_call",
+    "pre_approval_request", "post_approval_response", "subagent_start",
+)
 MAX_TRACKED_SESSIONS = 4096
 RELAY_URL_CACHE_SECONDS = 5.0
 
@@ -92,6 +97,9 @@ def clarify_question(args: Optional[dict[str, Any]]) -> str:
 
 
 class HermexPush:
+    # Marks this plugin's hook callbacks across module copies (see ``scopes``).
+    is_hermex_push = True
+
     def __init__(
         self, *, profile: str = "", sender: Optional[RelaySender] = None,
         keys_loader: Callable[[], Keys] = load_or_create_keys,
@@ -118,16 +126,7 @@ class HermexPush:
     # -- wiring ---------------------------------------------------------------------------
 
     def hook_callbacks(self) -> dict[str, Callable[..., None]]:
-        return {
-            "pre_llm_call": self.pre_llm_call,
-            "post_llm_call": self.post_llm_call,
-            "on_session_end": self.on_session_end,
-            "pre_tool_call": self.pre_tool_call,
-            "post_tool_call": self.post_tool_call,
-            "pre_approval_request": self.pre_approval_request,
-            "post_approval_response": self.post_approval_response,
-            "subagent_start": self.subagent_start,
-        }
+        return {name: getattr(self, name) for name in HOOK_NAMES}
 
     def close(self) -> None:
         """Plugin unload: stop the flush timer and the relay thread so a reload leaks nothing."""
