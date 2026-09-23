@@ -95,7 +95,10 @@ export function activityPush(event: ProgressEvent, device: Device, token: string
     payload: { aps: {
       timestamp: now, event: event.status === 'done' || event.status === 'failed' ? 'end' : 'update',
       'stale-date': now + 900,
-      'content-state': { v: 1, status: event.status, tool: event.tool, tool_calls: event.tool_calls, started_at: event.started_at },
+      // updated_at lets the widget say how fresh the state is; the phone cannot see `timestamp`.
+      'content-state': {
+        v: 1, status: event.status, tool: event.tool, tool_calls: event.tool_calls, started_at: event.started_at, updated_at: now,
+      },
     } },
   };
 }
