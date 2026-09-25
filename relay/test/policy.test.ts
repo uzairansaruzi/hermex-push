@@ -9,8 +9,12 @@ describe('delivery policy', () => {
       expect(deliveryPolicy({ ...notification, kind }, device, false, 0)).toMatchObject({ type: 'banner', interruption: 'time-sensitive' });
     }
   });
-  it('never banners a session with an activity, and never banners progress', () => {
-    for (const kind of ['reply', 'approval', 'clarify', 'turn_error'] as const) expect(deliveryPolicy({ ...notification, kind }, device, true, 0)).toEqual({ type: 'none' });
+  it('lets an activity replace reply and error banners but not attention requests, and never banners progress', () => {
+    for (const kind of ['reply', 'turn_error'] as const) expect(deliveryPolicy({ ...notification, kind }, device, true, 0)).toEqual({ type: 'none' });
+    for (const kind of ['approval', 'clarify'] as const) {
+      expect(deliveryPolicy({ ...notification, kind }, device, true, 0)).toEqual({ type: 'banner', interruption: 'time-sensitive', collapseId: notification.collapse_id, threadId: notification.thread_id, preview: true });
+    }
+    expect(deliveryPolicy({ ...notification, kind: 'approval', is_subagent: true }, device, true, 0)).toEqual({ type: 'none' });
     expect(deliveryPolicy(progress, device, true, 0)).toEqual({ type: 'activity' });
     expect(deliveryPolicy(progress, device, false, 0)).toEqual({ type: 'none' });
   });

@@ -127,6 +127,16 @@ it('sends status changes immediately, supersedes held progress, and suppresses t
   expect(vi.mocked(ApnsSender.prototype.send).mock.calls[3]?.[0].type).toBe('alert');
 });
 
+it('banners an approval during an activity while its waiting update stays silent', async () => {
+  await registerActivity();
+  await request('notify', 'POST', { ...progress, status: 'waiting' });
+  await request('notify', 'POST', { ...notification, kind: 'approval' });
+  const pushes = vi.mocked(ApnsSender.prototype.send).mock.calls.map(([push]) => push);
+  expect(pushes.map(push => push.type)).toEqual(['liveactivity', 'alert']);
+  expect(pushes[0]?.payload).not.toHaveProperty('aps.alert');
+  expect(pushes[1]).toMatchObject({ payload: { aps: { 'interruption-level': 'time-sensitive' }, kind: 'approval' } });
+});
+
 it('activity deletion cancels pending updates and restores banners', async () => {
   await registerActivity();
   await request(`devices/${device.device_token}/activities/${encodeURIComponent(progress.session_id)}`, 'DELETE');
