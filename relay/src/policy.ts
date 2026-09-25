@@ -5,10 +5,14 @@ export type Delivery =
   | { type: 'activity' }
   | { type: 'banner'; interruption: 'active' | 'time-sensitive'; collapseId: string; threadId: string; preview: boolean };
 
-/** All per-device delivery etiquette lives here; no storage, clocks, or network calls. */
+/**
+ * All per-device delivery etiquette lives here; no storage, clocks, or network calls.
+ * A session's activity replaces its reply and error banners, but approvals and questions
+ * still banner: the activity's silent `waiting` update alone would leave the agent blocked unseen.
+ */
 export function deliveryPolicy(event: PushEvent, device: Device, hasActivity: boolean, now: number): Delivery {
-  if (hasActivity) return event.kind === 'progress' ? { type: 'activity' } : { type: 'none' };
-  if (event.kind === 'progress') return { type: 'none' };
+  if (event.kind === 'progress') return hasActivity ? { type: 'activity' } : { type: 'none' };
+  if (hasActivity && event.kind !== 'approval' && event.kind !== 'clarify') return { type: 'none' };
   const prefs = device.prefs;
   if (event.is_subagent && prefs.mute_subagents) return { type: 'none' };
   if (event.kind === 'reply' && (!prefs.replies || (
