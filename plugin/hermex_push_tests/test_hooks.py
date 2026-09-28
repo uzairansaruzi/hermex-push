@@ -227,3 +227,21 @@ def test_relay_url_from_env_refuses_cleartext_to_remote_hosts(monkeypatch):
     assert relay_url_from_env() == ""
     monkeypatch.setenv("HERMEX_PUSH_RELAY_URL", "https://relay.example")
     assert relay_url_from_env() == "https://relay.example"
+
+
+def test_a_session_whose_hold_ends_first_is_not_kept_waiting_by_another(keys, sender):
+    clock, delays = {"now": 1000.0}, []
+    push = HermexPush(sender=sender, keys_loader=lambda: keys, relay_url=lambda: "https://r",
+                      now=lambda: clock["now"], schedule=lambda delay, fn: delays.append(delay))
+    push.pre_llm_call(session_id="b", platform="desktop")
+    clock["now"] = 1002.0
+    push.pre_llm_call(session_id="a", platform="desktop")
+    clock["now"] = 1003.0
+    push.pre_tool_call(tool_name="terminal", session_id="a")  # held until 1007
+    clock["now"] = 1003.5
+    push.pre_tool_call(tool_name="terminal", session_id="b")  # held until 1005
+    assert delays == [4.0, 1.5]
+    clock["now"] = 1005.0
+    push.flush_progress()
+    assert [e["session_id"] for _, e in sender.events] == ["b", "a", "b"]
+    assert delays == [4.0, 1.5, 2.0]  # re-armed for a's hold

@@ -1,7 +1,7 @@
 """Background delivery to the relay. Hooks run on the agent's turn path, so they only enqueue;
-one daemon thread POSTs with a short timeout and a single retry (none for progress, which the
-next update replaces). Nothing is persisted: a push that cannot be delivered within seconds is
-stale anyway."""
+one daemon thread POSTs with a short timeout and a single retry (none for progress the next
+update replaces). Nothing is persisted: a push that cannot be delivered within seconds is stale
+anyway."""
 
 from __future__ import annotations
 
@@ -111,9 +111,12 @@ class RelaySender:
     def deliver(self, url: str, event: dict[str, Any]) -> bool:
         """Synchronous POST with one retry on a network error or 5xx. Progress gets no retry: it
         would double traffic during a relay outage to resend a state the next update replaces.
+        The turn's last progress (``done`` / ``failed``) keeps it: nothing follows to replace it,
+        and the relay withholds the reply banner while the activity it ends still runs.
         Never logs the body."""
         body = json.dumps(event, separators=(",", ":")).encode("utf-8")
-        attempts = 1 if event.get("kind") == "progress" else 2
+        replaceable = event.get("kind") == "progress" and event.get("status") not in ("done", "failed")
+        attempts = 1 if replaceable else 2
         for attempt in range(1, attempts + 1):
             try:
                 status = self._post(url, body)

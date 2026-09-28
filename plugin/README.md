@@ -84,8 +84,9 @@ status changes always through):
  "started_at": 1726599990}
 ```
 
-Progress carries the tool's name only, never arguments or results. A notification is retried
-once after a 5xx or network error; progress is not, since the next update replaces it.
+Progress carries the tool's name only, never arguments or results. A notification, and the
+progress that ends a turn (`done` or `failed`), is retried once after a 5xx or network error.
+Other progress is not: the next update replaces it.
 
 ## Pairing
 
