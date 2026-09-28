@@ -1,9 +1,10 @@
-"""Per-session Live Activity progress with one-second coalescing.
+"""Per-session Live Activity progress with five-second coalescing.
 
 A status change (``running`` / ``waiting`` / ``done`` / ``failed``) always produces an event
 right away. Routine tool boundaries inside the same status are held so a session emits at most
-one progress event per second; the caller flushes held events with :meth:`due` after
-:attr:`HOLD_SECONDS`. Pure: time comes from the caller, so tests drive it with a fake clock.
+one routine progress event every :data:`HOLD_SECONDS`; the caller flushes held events with
+:meth:`due` when :meth:`flush_delay` says a hold has ended. Pure: time comes from the caller,
+so tests drive it with a fake clock.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-HOLD_SECONDS = 1.0
+HOLD_SECONDS = 5.0  # progress is most relay traffic; status changes skip the hold
 MAX_SESSIONS = 512
 STALE_SECONDS = 15 * 60  # a session silent this long is forgotten; matches the activity stale date
 
@@ -108,5 +109,7 @@ class ProgressCoalescer:
                 out.append(self._snapshot(session_id, state, now))
         return out
 
-    def has_pending(self) -> bool:
-        return any(s.pending for s in self._sessions.values())
+    def flush_delay(self, now: float) -> Optional[float]:
+        """Seconds until the earliest held update's hold ends, or None when nothing is held."""
+        holds = [HOLD_SECONDS - (now - s.last_emit) for s in self._sessions.values() if s.pending]
+        return max(0.0, min(holds)) if holds else None

@@ -20,6 +20,29 @@ def test_deliver_retries_server_errors_once_and_gives_up_on_client_errors():
     assert sender.deliver("https://r", {"kind": "reply"}) is False
 
 
+def test_progress_is_not_retried_unless_it_ends_the_turn():
+    def attempts(event, failure):
+        calls = []
+
+        def post(url, body):
+            calls.append(body)
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
+
+        assert RelaySender(post=post, sleep=lambda s: None).deliver("https://r", event) is False
+        return len(calls)
+
+    for failure in (503, ConnectionError("relay down")):
+        for status in ("running", "waiting"):
+            assert attempts({"kind": "progress", "status": status}, failure) == 1
+        # Nothing replaces a lost done/failed, and the activity it ends holds back the reply banner.
+        for status in ("done", "failed"):
+            assert attempts({"kind": "progress", "status": status}, failure) == 2
+        for kind in ("reply", "approval", "clarify", "turn_error"):
+            assert attempts({"kind": kind}, failure) == 2
+
+
 def test_enqueue_drains_on_a_background_thread():
     seen = []
     sender = RelaySender(post=lambda url, body: seen.append(url) or 200)

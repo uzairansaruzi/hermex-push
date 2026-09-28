@@ -23,7 +23,7 @@ from . import RELAY_URL_ENV
 from .keys import Keys, hermes_root, load_or_create_keys
 from .payload import notify_event, preview, progress_event
 from .privacy import keyed_id
-from .progress import HOLD_SECONDS, ProgressCoalescer, ProgressSnapshot
+from .progress import ProgressCoalescer, ProgressSnapshot
 from .relay import RelaySender, allowed_relay_url, notify_url
 from .sources import coarse_source, should_notify
 
@@ -119,7 +119,7 @@ class HermexPush:
         self._reply_by_session = _Recent()
         self._subagent_sessions = _Recent()
         self._progress = ProgressCoalescer()
-        self._flush_scheduled = False
+        self._flush_at: Optional[float] = None  # when the armed flush fires; None when unarmed
         self._flush_timer: Optional[threading.Timer] = None
         self._closed = False
 
@@ -205,15 +205,25 @@ class HermexPush:
         ))
 
     def _arm_flush(self) -> None:
+        """Schedule a flush for when the earliest held update's hold ends, replacing an armed
+        flush that would fire later (another session's hold can end first). A stray flush is
+        harmless: it sends only what is due and re-arms."""
         with self._lock:
-            if self._closed or self._flush_scheduled or not self._progress.has_pending():
+            if self._closed:
                 return
-            self._flush_scheduled = True
+            now = self._now()
+            delay = self._progress.flush_delay(now)
+            if delay is None or (self._flush_at is not None and self._flush_at <= now + delay):
+                return
+            self._flush_at = now + delay
+            replaced, self._flush_timer = self._flush_timer, None
+        if replaced is not None:
+            replaced.cancel()
         try:
-            timer = self._schedule(HOLD_SECONDS, self.flush_progress)
+            timer = self._schedule(delay, self.flush_progress)
         except Exception:
             with self._lock:
-                self._flush_scheduled = False
+                self._flush_at = None
             logger.debug("hermex-push: could not schedule a progress flush", exc_info=True)
             return
         with self._lock:
@@ -221,7 +231,7 @@ class HermexPush:
 
     def flush_progress(self) -> None:
         with self._lock:
-            self._flush_scheduled = False
+            self._flush_at = None
             self._flush_timer = None
             snapshots = self._progress.due(self._now())
         for snapshot in snapshots:

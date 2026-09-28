@@ -75,7 +75,8 @@ install_key>`. A `null` seal means encryption failed on the host; the phone show
 banner. `event_id` is stable per turn or request for relay dedupe; `thread_id` and
 `collapse_id` are stable per session. All three are HMAC-SHA256 keyed from the install key.
 
-Progress (Live Activity state, one per session per second, status changes always through):
+Progress (Live Activity state, routine updates at most one per session every five seconds,
+status changes always through):
 
 ```json
 {"v": 1, "kind": "progress", "event_id": "…", "thread_id": "…", "session_id": "…", "source": "bot",
@@ -83,7 +84,9 @@ Progress (Live Activity state, one per session per second, status changes always
  "started_at": 1726599990}
 ```
 
-Progress carries the tool's name only, never arguments or results.
+Progress carries the tool's name only, never arguments or results. A notification, and the
+progress that ends a turn (`done` or `failed`), is retried once after a 5xx or network error.
+Other progress is not: the next update replaces it.
 
 ## Pairing
 

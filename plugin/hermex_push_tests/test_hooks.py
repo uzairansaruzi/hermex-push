@@ -132,7 +132,7 @@ def test_no_event_of_any_kind_carries_plaintext(push, sender):
     push.pre_approval_request(command=marker, description=marker, session_id="s", surface="cli", request_id="r")
     push.post_llm_call(session_id="s", user_message=marker, assistant_response=marker, platform="desktop")
     push.on_session_end(session_id="s", completed=True, interrupted=False, turn_id="t", platform="desktop")
-    push.clock["now"] += 2
+    push.clock["now"] += 5
     push.flush_progress()
     assert len(sender.events) >= 6
     assert marker not in json.dumps([e for _, e in sender.events])
@@ -181,12 +181,17 @@ def test_subagent_sessions_are_flagged(push, sender):
     assert notifications(sender)[0]["is_subagent"] is True
 
 
-def test_routine_tool_progress_is_coalesced_then_flushed(push, sender):
+def test_routine_tool_progress_is_coalesced_then_flushed(keys, sender):
+    clock, delays = {"now": 1000.0}, []
+    push = HermexPush(sender=sender, keys_loader=lambda: keys, relay_url=lambda: "https://r",
+                      now=lambda: clock["now"], schedule=lambda delay, fn: delays.append(delay))
     push.pre_llm_call(session_id="s", platform="desktop")
+    clock["now"] += 3
     push.pre_tool_call(tool_name="terminal", args={"command": "secret"}, session_id="s")
     push.post_tool_call(tool_name="terminal", session_id="s")
     assert len(sender.events) == 1  # only the turn start went through
-    push.clock["now"] += 1.5
+    assert delays == [2.0]  # one flush, when the turn start's five-second hold ends
+    clock["now"] += 2
     push.flush_progress()
     assert len(sender.events) == 2
     last = sender.events[-1][1]
@@ -222,3 +227,21 @@ def test_relay_url_from_env_refuses_cleartext_to_remote_hosts(monkeypatch):
     assert relay_url_from_env() == ""
     monkeypatch.setenv("HERMEX_PUSH_RELAY_URL", "https://relay.example")
     assert relay_url_from_env() == "https://relay.example"
+
+
+def test_a_session_whose_hold_ends_first_is_not_kept_waiting_by_another(keys, sender):
+    clock, delays = {"now": 1000.0}, []
+    push = HermexPush(sender=sender, keys_loader=lambda: keys, relay_url=lambda: "https://r",
+                      now=lambda: clock["now"], schedule=lambda delay, fn: delays.append(delay))
+    push.pre_llm_call(session_id="b", platform="desktop")
+    clock["now"] = 1002.0
+    push.pre_llm_call(session_id="a", platform="desktop")
+    clock["now"] = 1003.0
+    push.pre_tool_call(tool_name="terminal", session_id="a")  # held until 1007
+    clock["now"] = 1003.5
+    push.pre_tool_call(tool_name="terminal", session_id="b")  # held until 1005
+    assert delays == [4.0, 1.5]
+    clock["now"] = 1005.0
+    push.flush_progress()
+    assert [e["session_id"] for _, e in sender.events] == ["b", "a", "b"]
+    assert delays == [4.0, 1.5, 2.0]  # re-armed for a's hold
