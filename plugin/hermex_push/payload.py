@@ -22,6 +22,7 @@ It never carries tool arguments or results, only the tool's name.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Optional
 
@@ -35,6 +36,9 @@ PROGRESS_STATUSES = frozenset({"running", "waiting", "done", "failed"})
 TITLE_CHARS = 80
 SUBTITLE_CHARS = 120
 BODY_CHARS = 400
+# Only a text's head is flattened: unpaired delimiters on one long line make the scan quadratic,
+# and no banner shows more than a few hundred characters.
+FLATTEN_CHARS = 4000
 
 
 def _as_text(value: Any) -> str:
@@ -51,16 +55,64 @@ def _as_text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
-def _clip(text: Any, limit: int) -> str:
-    text = " ".join(_as_text(text).split())
+# Code is stashed behind NUL-delimited indexes first so its content stays verbatim: a fenced
+# block (closed, or running to the end of the text) or a one-line span between equal backtick runs.
+_CODE = re.compile(
+    r"^[ \t]*(?P<fence>`{3,}|~{3,})[^`\n]*\n(?P<block>.*?)(?:^[ \t]*(?P=fence)[`~]*[ \t]*$|\Z)"
+    r"|(?<!`)(?P<ticks>`+)(?!`)(?P<span>[^\n]+?)(?<!`)(?P=ticks)(?!`)",
+    re.M | re.S,
+)
+_STASHED = re.compile(r"\x00(\d+)\x00")
+
+# Applied in order to the text around the code. Block markers only count at a line start, so
+# this runs while the newlines are still there. Emphasis follows CommonMark flanking: an opener
+# is followed by non-space, a closer preceded by non-space (so ``2 * 3 * 4`` stays), and ``_``
+# never opens or closes inside a word (so ``snake_case_name`` stays).
+_MARKDOWN = [
+    (re.compile(r"^[ \t]*(?:>[ \t]?)+", re.M), ""),  # blockquote markers
+    (re.compile(r"^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$", re.M), ""),  # thematic breaks
+    (re.compile(r"^[ \t]*#{1,6}[ \t]+", re.M), ""),  # heading markers; `C#` and `#tag` stay
+    (re.compile(r"^[ \t]*[-*+][ \t]+", re.M), ""),  # list bullets
+    (re.compile(r"!?\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)"), r"\1"),  # links and images
+    (re.compile(r"(?<!\*)\*\*(?!\s)(.+?)(?<!\s)\*\*(?!\*)"), r"\1"),
+    (re.compile(r"(?<!\w)__(?!\s)(.+?)(?<!\s)__(?!\w)"), r"\1"),
+    (re.compile(r"(?<!~)~~(?!\s)(.+?)(?<!\s)~~(?!~)"), r"\1"),
+    (re.compile(r"(?<!\*)\*(?![\s*])(.+?)(?<![\s*])\*(?!\*)"), r"\1"),
+    (re.compile(r"(?<!\w)_(?![\s_])(.+?)(?<![\s_])_(?!\w)"), r"\1"),
+]
+
+
+def _plain(text: str) -> str:
+    """Markdown to the plain text a banner can show: the syntax goes, the words stay."""
+    code: list[str] = []
+
+    def stash(match: re.Match[str]) -> str:
+        code.append(match["block"] if match["fence"] else match["span"])
+        return f"\x00{len(code) - 1}\x00"
+
+    text = _CODE.sub(stash, text.replace("\x00", ""))
+    for pattern, replacement in _MARKDOWN:
+        text = pattern.sub(replacement, text)
+    return _STASHED.sub(lambda match: code[int(match[1])], text)
+
+
+def _clip(text: Any, limit: int, *, markdown: bool) -> str:
+    """Flatten first, then collapse whitespace and clip, so the budget is spent on words."""
+    text = _as_text(text)
+    if markdown:
+        text = _plain(text[:FLATTEN_CHARS]) + text[FLATTEN_CHARS:]
+    text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1] + "\u2026"
 
 
-def preview(*, title: Any, body: Any, profile: str, subtitle: Any = "", request_id: str = "") -> dict[str, str]:
+def preview(*, title: Any, body: Any, profile: str, subtitle: Any = "", request_id: str = "",
+            markdown: bool = True) -> dict[str, str]:
+    """The sealed banner content. iOS banners render plain text, so markdown is flattened before
+    sealing; ``markdown=False`` keeps text that is not markdown, like a shell command, verbatim."""
     return {
-        "title": _clip(title, TITLE_CHARS),
-        "subtitle": _clip(subtitle, SUBTITLE_CHARS),
-        "body": _clip(body, BODY_CHARS),
+        "title": _clip(title, TITLE_CHARS, markdown=markdown),
+        "subtitle": _clip(subtitle, SUBTITLE_CHARS, markdown=markdown),
+        "body": _clip(body, BODY_CHARS, markdown=markdown),
         "profile": profile,
         "request_id": request_id,
     }

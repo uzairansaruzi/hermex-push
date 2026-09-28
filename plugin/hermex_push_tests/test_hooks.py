@@ -85,6 +85,16 @@ def test_clarify_and_approval_push_and_mark_waiting(push, sender, keys):
     assert [e["status"] for _, e in sender.events if e["kind"] == "progress"][-1] == "running"
 
 
+def test_questions_are_flattened_but_approval_commands_stay_verbatim(push, sender, keys):
+    command = "rm -rf __pycache__ && find . -name '*.md' -o -name '*.txt'"
+    push.pre_llm_call(session_id="s", platform="desktop")
+    push.pre_tool_call(tool_name="clarify", args={"question": "Deploy **now**?"}, session_id="s", tool_call_id="c")
+    push.pre_approval_request(command=command, description="", session_id="s", surface="cli", request_id="r")
+    clarify, approval = (unseal(e["sealed"], preview_key=keys.preview_key, install_key=keys.install_key)
+                         for e in notifications(sender))
+    assert clarify["body"] == "Deploy now?" and approval["body"] == command
+
+
 def test_clarify_question_shapes():
     from hermex_push.hooks import clarify_question
     assert clarify_question({"questions": [{"question": "A?"}, {"question": "B?"}]}) == "A? (+1 more)"

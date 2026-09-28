@@ -71,7 +71,10 @@ Notification (`kind` is `reply`, `approval`, `clarify` or `turn_error`):
 
 `sealed` is base64 of `nonce(12) || AES-256-GCM ciphertext || tag(16)` over the UTF-8 JSON
 `{"title","subtitle","body","profile","request_id"}`, AAD `hermex-preview-v1:<sha256 hex of
-install_key>`. A `null` seal means encryption failed on the host; the phone shows a generic
+install_key>`. Banners render no markdown, so title, subtitle and body are flattened to plain
+text and then clipped to 80, 120 and 400 characters; an approval's command is shell, not
+markdown, and stays verbatim.
+A `null` seal means encryption failed on the host; the phone shows a generic
 banner. `event_id` is stable per turn or request for relay dedupe; `thread_id` and
 `collapse_id` are stable per session. All three are HMAC-SHA256 keyed from the install key.
 
