@@ -95,7 +95,7 @@ Other progress is not: the next update replaces it.
 
 `GET /api/plugins/hermex-push/pairing` (dashboard auth) returns
 `{"relay_url", "install_key", "preview_key", "platform": "hermex", "payload_version": 1,
-"plugin_version": "0.2.0"}`. `plugin_version` is the plugin code the dashboard process loaded. It
+"plugin_version": "<semver>"}`. `plugin_version` is the plugin code the dashboard process loaded. It
 lags the files on disk (what `hermes plugins list` shows) until that process restarts, so Hermex
 can tell an outdated plugin from one that only needs a restart; plugins older than 0.2.0 omit
 it. `preview_key` is base64 of 32 bytes. Both keys are generated on first use under a file lock at
@@ -129,5 +129,10 @@ uv venv .venv && uv pip install --python .venv/bin/python pytest cryptography fa
 
 Every merged change under `plugin/` bumps `PLUGIN_VERSION` in `hermex_push/__init__.py` (patch
 for fixes, minor for features) along with `plugin.yaml`, `pyproject.toml` and
-`dashboard/manifest.json`; `test_plugin.py` fails when the four disagree. Hosts pick up a change
-with `hermes plugins update hermex-push` and a restart of the Hermes processes that run agents.
+`dashboard/manifest.json`; `test_plugin.py` fails when the four disagree.
+
+Hosts pick up a change with `hermes plugins update hermex-push` on hermes-agent 0.21.5 or later.
+Earlier versions cannot update a subdirectory install, so reinstall there with
+`hermes plugins install https://github.com/uzairansaruzi/hermex-push.git/plugin --force --enable`.
+Either way the pairing keys survive, and the change takes effect once the Hermes processes that
+run agents restart.
