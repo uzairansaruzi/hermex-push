@@ -15,6 +15,8 @@ import urllib.request
 from typing import Any, Callable, Optional
 from urllib.parse import urlsplit
 
+from . import PLUGIN_VERSION
+
 logger = logging.getLogger("hermex_push")
 
 QUEUE_LIMIT = 256
@@ -51,7 +53,7 @@ _opener = urllib.request.build_opener(_NoRedirect)
 def _urllib_post(url: str, body: bytes) -> int:
     request = urllib.request.Request(
         url, data=body, method="POST",
-        headers={"Content-Type": "application/json", "User-Agent": "hermex-push-plugin/0.1"},
+        headers={"Content-Type": "application/json", "User-Agent": f"hermex-push-plugin/{PLUGIN_VERSION}"},
     )
     try:
         with _opener.open(request, timeout=TIMEOUT_SECONDS) as response:
