@@ -1,6 +1,7 @@
 """Background delivery to the relay. Hooks run on the agent's turn path, so they only enqueue;
-one daemon thread POSTs with a short timeout and a single retry. Nothing is persisted: a push
-that cannot be delivered within seconds is stale anyway."""
+one daemon thread POSTs with a short timeout and a single retry (none for progress, which the
+next update replaces). Nothing is persisted: a push that cannot be delivered within seconds is
+stale anyway."""
 
 from __future__ import annotations
 
@@ -108,9 +109,12 @@ class RelaySender:
                 self._queue.task_done()
 
     def deliver(self, url: str, event: dict[str, Any]) -> bool:
-        """Synchronous POST with one retry on a network error or 5xx. Never logs the body."""
+        """Synchronous POST with one retry on a network error or 5xx. Progress gets no retry: it
+        would double traffic during a relay outage to resend a state the next update replaces.
+        Never logs the body."""
         body = json.dumps(event, separators=(",", ":")).encode("utf-8")
-        for attempt in (1, 2):
+        attempts = 1 if event.get("kind") == "progress" else 2
+        for attempt in range(1, attempts + 1):
             try:
                 status = self._post(url, body)
             except Exception as exc:
@@ -122,7 +126,7 @@ class RelaySender:
             if status and status < 500:
                 logger.warning("hermex-push: relay rejected a %s event (%s)", event.get("kind"), reason)
                 return False
-            if attempt == 1:
+            if attempt < attempts:
                 self._sleep(RETRY_DELAY_SECONDS)
         logger.warning("hermex-push: relay unreachable for a %s event (%s)", event.get("kind"), reason)
         return False

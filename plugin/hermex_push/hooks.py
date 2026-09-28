@@ -23,7 +23,7 @@ from . import RELAY_URL_ENV
 from .keys import Keys, hermes_root, load_or_create_keys
 from .payload import notify_event, preview, progress_event
 from .privacy import keyed_id
-from .progress import HOLD_SECONDS, ProgressCoalescer, ProgressSnapshot
+from .progress import ProgressCoalescer, ProgressSnapshot
 from .relay import RelaySender, allowed_relay_url, notify_url
 from .sources import coarse_source, should_notify
 
@@ -205,12 +205,16 @@ class HermexPush:
         ))
 
     def _arm_flush(self) -> None:
+        """Schedule one flush for when the earliest held update's hold ends."""
         with self._lock:
-            if self._closed or self._flush_scheduled or not self._progress.has_pending():
+            if self._closed or self._flush_scheduled:
+                return
+            delay = self._progress.flush_delay(self._now())
+            if delay is None:
                 return
             self._flush_scheduled = True
         try:
-            timer = self._schedule(HOLD_SECONDS, self.flush_progress)
+            timer = self._schedule(delay, self.flush_progress)
         except Exception:
             with self._lock:
                 self._flush_scheduled = False

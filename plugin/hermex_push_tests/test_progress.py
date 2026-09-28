@@ -4,16 +4,20 @@ from hermex_push.progress import ProgressCoalescer
 def test_status_changes_always_emit_and_routine_updates_coalesce():
     c = ProgressCoalescer()
     assert c.turn_started("s", 0.0).status == "running"
-    assert c.tool_started("s", "terminal", 0.2) is None  # within the hold window
-    assert c.tool_finished("s", 0.4) is None
-    assert c.has_pending()
-    assert c.due(0.9) == []
-    flushed = c.due(1.0)
-    assert [f.tool_calls for f in flushed] == [1] and flushed[0].tool is None
-    assert not c.has_pending()
-    waiting = c.waiting("s", 1.1)
+    # Routine tool boundaries inside the five-second hold coalesce into one held update.
+    assert c.tool_started("s", "terminal", 1.0) is None
+    assert c.tool_finished("s", 2.0) is None
+    assert c.tool_started("s", "read_file", 3.0) is None
+    assert c.tool_finished("s", 4.0) is None
+    assert c.flush_delay(4.0) == 1.0  # due when the hold ends, not a full hold after the last update
+    assert c.due(4.9) == []
+    flushed = c.due(5.0)
+    assert [f.tool_calls for f in flushed] == [2] and flushed[0].tool is None
+    assert c.flush_delay(5.0) is None
+    # A status change inside the next hold window still goes out at once.
+    waiting = c.waiting("s", 6.0)
     assert waiting is not None and waiting.status == "waiting"
-    assert c.resumed("s", 1.2).status == "running"
+    assert c.resumed("s", 7.0).status == "running"
 
 
 def test_turn_end_emits_and_forgets_the_session():
@@ -32,7 +36,7 @@ def test_sessions_are_independent():
     assert c.turn_started("b", 0.1).session_id == "b"
     assert c.tool_started("a", "terminal", 0.2) is None
     assert c.turn_ended("b", 0.3, failed=False).session_id == "b"
-    assert [s.session_id for s in c.due(1.5)] == ["a"]
+    assert [s.session_id for s in c.due(5.0)] == ["a"]
 
 
 def test_sessions_that_never_end_are_bounded_and_stale_ones_forgotten():

@@ -20,6 +20,25 @@ def test_deliver_retries_server_errors_once_and_gives_up_on_client_errors():
     assert sender.deliver("https://r", {"kind": "reply"}) is False
 
 
+def test_progress_is_not_retried_but_notifications_still_retry_once():
+    def attempts(kind, failure):
+        calls = []
+
+        def post(url, body):
+            calls.append(body)
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
+
+        assert RelaySender(post=post, sleep=lambda s: None).deliver("https://r", {"kind": kind}) is False
+        return len(calls)
+
+    for failure in (503, ConnectionError("relay down")):
+        assert attempts("progress", failure) == 1
+        for kind in ("reply", "approval", "clarify", "turn_error"):
+            assert attempts(kind, failure) == 2
+
+
 def test_enqueue_drains_on_a_background_thread():
     seen = []
     sender = RelaySender(post=lambda url, body: seen.append(url) or 200)
