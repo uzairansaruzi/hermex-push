@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from hermex_push.payload import notify_event, preview, progress_event
@@ -30,6 +33,49 @@ def test_preview_is_clipped_and_whitespace_normalised():
     p = preview(title="  a\n b ", body="x" * 1000, profile="p")
     assert p["title"] == "a b"
     assert len(p["body"]) == 400 and p["body"].endswith("…")
+
+
+def test_preview_drops_emphasis_code_and_heading_markers():
+    # The body is the banner reported in hermex#583.
+    p = preview(title="## Summary", subtitle="__strong__ *it* _em_ ~~old~~ run `npm test`",
+                body="Here's one: **The 1×1 Pixel** The iOS simulator test failed again.", profile="p")
+    assert p["title"] == "Summary"
+    assert p["subtitle"] == "strong it em old run npm test"
+    assert p["body"] == "Here's one: The 1×1 Pixel The iOS simulator test failed again."
+
+
+def test_preview_keeps_link_text_and_image_alt_text():
+    p = preview(title="t", body='See [the docs](https://example.com/a_(b)) and ![a chart](chart.png "Chart").',
+                profile="p")
+    assert p["body"] == "See the docs and a chart."
+
+
+def test_preview_flattens_code_blocks_lists_and_quotes_to_one_line():
+    body = "Run:\n\n```sh\nnpm test  # __all__ of it\n```\n\n- one\n* two\n  + three\n> quoted\n>> nested"
+    assert preview(title="t", body=body, profile="p")["body"] == "Run: npm test # __all__ of it one two three quoted nested"
+
+
+def test_preview_leaves_text_that_only_contains_markdown_characters():
+    body = "2 * 3 * 4 = 24\nsnake_case_name, C# and\n#hashtag"
+    assert preview(title="t", body=body, profile="p")["body"] == "2 * 3 * 4 = 24 snake_case_name, C# and #hashtag"
+    body = "2*(n-1)*k, f(*args) and g(*rest), x**(1/2) + y**(1/3)"
+    assert preview(title="t", body=body, profile="p")["body"] == body
+
+
+def test_plain_preview_is_still_the_sealed_fixture():
+    """Plain text passes through unchanged, so the vector the phone decrypts still matches."""
+    vec = json.loads((Path(__file__).parent / "fixtures" / "sealed_preview.json").read_text())
+    assert preview(title="Hermes", subtitle="what time is it", body="Noon.", profile="default") == vec["preview"]
+
+
+def test_preview_clips_after_flattening():
+    p = preview(title="t", body=f"[the docs](https://example.com/{'x' * 500}) are ready", profile="p")
+    assert p["body"] == "the docs are ready"
+    p = preview(title="t", body="**word** " * 100, profile="p")
+    assert len(p["body"]) == 400 and "*" not in p["body"]
+    # A link longer than the first few thousand characters still flattens instead of leaking raw.
+    body = f"Here's the chart:\n\n![chart](data:image/png;base64,{'A' * 6600})\n\nThe trend is up."
+    assert preview(title="t", body=body, profile="p")["body"] == "Here's the chart: chart The trend is up."
 
 
 def test_unknown_kind_and_status_are_rejected(keys):

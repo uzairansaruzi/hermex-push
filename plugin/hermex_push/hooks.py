@@ -341,9 +341,11 @@ class HermexPush:
                 snapshot = self._progress.waiting(sid, self._now())
             self._emit_progress(snapshot)
             ref = request_id or tool_call_id or f"approval:{int(self._now())}"
+            # The command is shell, not markdown: flattening would turn `*.md` or `__pycache__`
+            # into a different command than the one awaiting approval.
             self._notify("approval", sid, ref, preview(
                 title="Approval needed", subtitle=description, body=command, profile=self._profile,
-                request_id=request_id))
+                request_id=request_id, markdown=False))
         except Exception:
             logger.warning("hermex-push: pre_approval_request failed", exc_info=True)
 
