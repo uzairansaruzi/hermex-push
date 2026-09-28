@@ -1,5 +1,7 @@
-"""The plugin entry point, the pairing route and the pinned install identifier."""
+"""The plugin entry point, the pairing route, the pinned install identifier and the version."""
 import importlib.util
+import json
+import re
 import sys
 from pathlib import Path
 
@@ -7,7 +9,7 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from hermex_push import INSTALL_IDENTIFIER, PLUGIN_NAME
+from hermex_push import INSTALL_IDENTIFIER, PLUGIN_NAME, PLUGIN_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,6 +48,16 @@ def test_install_identifier_and_manifest_names_agree():
     assert json.loads((ROOT / "dashboard" / "manifest.json").read_text())["name"] == PLUGIN_NAME
 
 
+def test_declared_versions_match_the_loaded_version():
+    assert re.fullmatch(r"\d+\.\d+\.\d+", PLUGIN_VERSION)
+    pyproject = re.search(r'^version = "([^"]+)"$', (ROOT / "pyproject.toml").read_text(), re.M)
+    assert {
+        "plugin.yaml": str(yaml.safe_load((ROOT / "plugin.yaml").read_text())["version"]),
+        "pyproject.toml": pyproject and pyproject[1],
+        "dashboard/manifest.json": json.loads((ROOT / "dashboard" / "manifest.json").read_text())["version"],
+    } == dict.fromkeys(["plugin.yaml", "pyproject.toml", "dashboard/manifest.json"], PLUGIN_VERSION)
+
+
 def test_register_declares_platform_and_every_manifest_hook():
     plugin = _load(ROOT / "__init__.py", "hermex_push_plugin_under_test")
     ctx = FakeCtx()
@@ -70,6 +82,7 @@ def test_pairing_route_returns_keys_only_with_a_relay_url(hermes_home, monkeypat
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
     body = response.json()
     assert body["relay_url"] == "https://relay.test" and body["platform"] == "hermex" and body["payload_version"] == 1
+    assert body["plugin_version"] == PLUGIN_VERSION
     assert len(body["install_key"]) == 64
     import base64
     assert len(base64.b64decode(body["preview_key"])) == 32

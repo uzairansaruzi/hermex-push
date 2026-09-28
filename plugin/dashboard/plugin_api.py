@@ -3,8 +3,10 @@ auth. Hermex calls ``GET /pairing`` once with the user's dashboard login and sto
 in the Keychain; no key is ever typed.
 
 Response: ``{"relay_url": str, "install_key": <64 hex>, "preview_key": <base64 of 32 bytes>,
-"platform": "hermex", "payload_version": 1}``. 409 when ``HERMEX_PUSH_RELAY_URL`` is unset,
-because a pairing without a relay could never deliver.
+"platform": "hermex", "payload_version": 1, "plugin_version": "<semver>"}``. ``plugin_version``
+is the code this process loaded, which lags the files on disk until the dashboard restarts; a
+response without it comes from a plugin older than 0.2.0. 409 when ``HERMEX_PUSH_RELAY_URL`` is
+unset, because a pairing without a relay could never deliver.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ _ROOT = str(Path(__file__).resolve().parents[1])
 if _ROOT not in sys.path:
     sys.path.append(_ROOT)
 
-from hermex_push import PLATFORM_NAME, RELAY_URL_ENV  # noqa: E402
+from hermex_push import PLATFORM_NAME, PLUGIN_VERSION, RELAY_URL_ENV  # noqa: E402
 from hermex_push.hooks import relay_url_from_env  # noqa: E402
 from hermex_push.keys import load_or_create_keys  # noqa: E402
 from hermex_push.payload import PAYLOAD_VERSION  # noqa: E402
@@ -40,6 +42,7 @@ def get_pairing() -> JSONResponse:
             "preview_key": keys.preview_key_b64,
             "platform": PLATFORM_NAME,
             "payload_version": PAYLOAD_VERSION,
+            "plugin_version": PLUGIN_VERSION,
         },
         headers={"Cache-Control": "no-store"},
     )

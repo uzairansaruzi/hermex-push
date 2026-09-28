@@ -94,8 +94,11 @@ Other progress is not: the next update replaces it.
 ## Pairing
 
 `GET /api/plugins/hermex-push/pairing` (dashboard auth) returns
-`{"relay_url", "install_key", "preview_key", "platform": "hermex", "payload_version": 1}`.
-`preview_key` is base64 of 32 bytes. Both keys are generated on first use under a file lock at
+`{"relay_url", "install_key", "preview_key", "platform": "hermex", "payload_version": 1,
+"plugin_version": "0.2.0"}`. `plugin_version` is the plugin code the dashboard process loaded. It
+lags the files on disk (what `hermes plugins list` shows) until that process restarts, so Hermex
+can tell an outdated plugin from one that only needs a restart; plugins older than 0.2.0 omit
+it. `preview_key` is base64 of 32 bytes. Both keys are generated on first use under a file lock at
 `<hermes root>/plugin-data/hermex-push/{install_key,preview_key}` (mode 0600) and never rotated
 behind a paired device. They live outside the plugin's install directory so `hermes plugins
 update`, a forced reinstall or `remove` cannot unpair a phone; keys from the first release's
@@ -123,3 +126,8 @@ Cron `deliver: hermex` and the `input`, `delivery` and `system` kinds are V1.1
 uv venv .venv && uv pip install --python .venv/bin/python pytest cryptography fastapi httpx pyyaml
 .venv/bin/python -m pytest plugin -q
 ```
+
+Every merged change under `plugin/` bumps `PLUGIN_VERSION` in `hermex_push/__init__.py` (patch
+for fixes, minor for features) along with `plugin.yaml`, `pyproject.toml` and
+`dashboard/manifest.json`; `test_plugin.py` fails when the four disagree. Hosts pick up a change
+with `hermes plugins update hermex-push` and a restart of the Hermes processes that run agents.
