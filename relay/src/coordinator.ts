@@ -28,12 +28,16 @@ const ok = (result = 'ok'): Outcome => ({ status: 200, result });
 const dueKey = (at: number, key = '') => `due:${String(at).padStart(15, '0')}:${key}`;
 // Expiry sweeps round up to the minute so a busy install's receipts share one alarm.
 const sweepAt = (expires: number) => Math.ceil(expires / 60_000) * 60_000;
+// Marks the legacy pass done. Event ids are hex, so this key never collides with a receipt.
+const indexedKey = 'event:~indexed';
 
 /** One serial owner per install. KV values are immutable; durable pointers make deletes immediate. */
 export class InstallCoordinator extends DurableObject<Env> {
   private tail: Promise<unknown> = Promise.resolve();
   private sender: ApnsSender;
   private indexed = false;
+  /** Earliest due time indexed by the current serial unit; `wake()` moves the alarm to it once. */
+  private wakeAt?: number;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -48,8 +52,10 @@ export class InstallCoordinator extends DurableObject<Env> {
 
   handle(installHash: string, command: Command): Promise<Outcome> {
     return this.serial(async () => {
-      try { return await this.execute(installHash, command); }
-      catch {
+      try {
+        try { return await this.execute(installHash, command); }
+        finally { await this.wake(); }
+      } catch {
         // RPC exception logging must not accidentally acquire request data later.
         return { status: 503, result: 'temporarily_unavailable' };
       }
@@ -87,9 +93,20 @@ export class InstallCoordinator extends DurableObject<Env> {
     return activity && activity.expires > now ? activity : undefined;
   }
 
-  /** Atomically writes rows plus a due-index entry for `key`, then moves the alarm earlier if needed. */
+  /** Atomically writes rows plus a due-index entry for `key`; the alarm moves once the serial unit ends. */
   private async putDue(rows: Record<string, unknown>, key: string, at: number) {
+    this.wakeAt = Math.min(this.wakeAt ?? at, at);
     await this.ctx.storage.put({ ...rows, [dueKey(at, key)]: key });
+  }
+
+  /**
+   * Moves the alarm earlier when the request indexed something due before it. Running once after
+   * the fan-out means concurrent holds can't overwrite each other's earlier alarm.
+   */
+  private async wake() {
+    const at = this.wakeAt;
+    this.wakeAt = undefined;
+    if (at === undefined) return;
     const alarm = await this.ctx.storage.getAlarm();
     if (alarm === null || alarm > at) await this.ctx.storage.setAlarm(at);
   }
@@ -261,7 +278,8 @@ export class InstallCoordinator extends DurableObject<Env> {
         await this.indexLegacy();
         await this.sweep();
       } finally {
-        // The first index row holds the next due time (`due:` plus 15 digits).
+        // The first index row holds the next due time (`due:` plus 15 digits), including anything the sweep indexed.
+        this.wakeAt = undefined;
         const [next] = await this.ctx.storage.list<string>({ prefix: 'due:', limit: 1 });
         if (next) await this.ctx.storage.setAlarm(Number(next[0].slice(4, 19)));
       }
@@ -309,9 +327,13 @@ export class InstallCoordinator extends DurableObject<Env> {
     }
   }
 
-  /** One-time pass per object: indexes rows written before the due index existed and recounts receipts. */
+  /**
+   * Indexes rows written before the due index existed and recounts receipts, once per object. The
+   * marker is an expired `event:` row, which an earlier version's cleanup deletes on its first
+   * request, so after a rollback and redeploy the pass reruns and picks up what that version wrote.
+   */
   private async indexLegacy() {
-    if (this.indexed || await this.ctx.storage.get('indexed')) { this.indexed = true; return; }
+    if (this.indexed || await this.ctx.storage.get(indexedKey)) { this.indexed = true; return; }
     const now = Date.now();
     const expired: string[] = [];
     const rows: [string, unknown][] = [];
@@ -331,7 +353,7 @@ export class InstallCoordinator extends DurableObject<Env> {
       await this.ctx.storage.put(Object.fromEntries(rows.slice(offset, offset + 128)));
     }
     // Written last: an interrupted pass reruns, and its index writes are idempotent.
-    await this.ctx.storage.put({ receipts, indexed: true });
+    await this.ctx.storage.put({ receipts, [indexedKey]: { expires: 0 } });
     this.indexed = true;
   }
 }
