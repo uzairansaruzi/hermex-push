@@ -219,14 +219,147 @@ it('revocation cancels a held activity update before its alarm runs', async () =
   expect(ApnsSender.prototype.send).toHaveBeenCalledTimes(1);
 });
 
-it('cleans up more than one storage delete batch of expired receipts', async () => {
+it('sweeps legacy receipts in batches, including rows written before the due index', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
   const stub = await coordinator();
+  // State as the previous version left it: receipts without index rows and an alarm from its schedule().
   await runInDurableObject(stub, async (_instance, state) => {
     await state.storage.put(Object.fromEntries(Array.from({ length: 256 }, (_, i) => [`event:expired-${i}`, { expires: 0, completed: [] }])));
+    await state.storage.put('event:live', { expires: 1_800_000_030_000, completed: [] });
+    await state.storage.put(`activity:${device.device_token}:expired`, { token: 'f'.repeat(64), expires: 0 });
+    await state.storage.setAlarm(1_800_000_000_000);
   });
+  const rows = () => runInDurableObject(stub, async (_instance, state) => [...(await state.storage.list()).keys()].filter(key => /^(event|activity):/.test(key)));
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect(await rows()).toEqual(['event:live', 'event:~indexed']);
+  clock.mockReturnValue(1_800_000_060_000);
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect(await rows()).toEqual(['event:~indexed']);
+});
+
+it('indexes again after a rollback and redeploy, because the earlier version deletes the marker', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+  const stub = await coordinator();
+  await request('notify', 'POST', notification);
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  // Rolled back: the earlier version deletes expired `event:` rows on each request and stores receipts without index entries.
+  clock.mockReturnValue(1_800_000_600_000);
+  await runInDurableObject(stub, async (_instance, state) => {
+    const rows = await state.storage.list<{ expires: number }>({ prefix: 'event:' });
+    await state.storage.delete([...rows].filter(([, row]) => row.expires <= Date.now()).map(([key]) => key));
+    await state.storage.put(Object.fromEntries(['1', '2'].map(c => [`event:${c.repeat(32)}`, { expires: 1_800_001_200_000, completed: [] }])));
+  });
+  // Redeployed: the next alarm recounts and indexes those receipts, then sweeps them at expiry.
+  await evictDurableObject(stub);
+  const state = () => runInDurableObject(stub, async (_instance, state) => ({ receipts: await state.storage.get('receipts'), alarm: await state.storage.getAlarm() }));
+  clock.mockReturnValue(1_800_000_660_000);
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect(await state()).toEqual({ receipts: 2, alarm: 1_800_001_200_000 });
+  clock.mockReturnValue(1_800_001_200_000);
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect(await state()).toEqual({ receipts: 0, alarm: null });
+});
+
+it('sweeps expired receipts together on one minute-aligned alarm', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_001_000);
+  const stub = await coordinator();
+  await request('notify', 'POST', notification);
+  clock.mockReturnValue(1_800_000_030_000);
+  await request('notify', 'POST', { ...notification, event_id: '1'.repeat(32) });
+  const state = () => runInDurableObject(stub, async (_instance, state) => ({
+    alarm: await state.storage.getAlarm(), keys: [...(await state.storage.list()).keys()].filter(key => /^(event|due):/.test(key)),
+  }));
+  expect((await state()).alarm).toBe(1_800_000_660_000);
+  clock.mockReturnValue(1_800_000_660_000);
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect(await state()).toEqual({ alarm: null, keys: ['event:~indexed'] });
+});
+
+it('enforces the per-install receipt cap and frees it after the sweep', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+  const stub = await coordinator();
+  const hash = await sha256(installKey);
+  const eventId = (i: number) => i.toString(16).padStart(32, '0');
+  await runInDurableObject(stub, async instance => {
+    for (let i = 0; i < 4096; i++) await instance.handle(hash, { action: 'notify', event: { ...notification, event_id: eventId(i) } });
+  });
+  expect((await request('notify', 'POST', { ...notification, event_id: eventId(4096) })).status).toBe(429);
+  expect((await request('notify', 'POST', { ...notification, event_id: eventId(0) })).status).toBe(200);
+  clock.mockReturnValue(1_800_000_660_000);
+  await runDurableObjectAlarm(stub);
+  expect((await request('notify', 'POST', { ...notification, event_id: eventId(4096) })).status).toBe(200);
+});
+
+it('notifies without listing stored receipts', async () => {
   await register();
-  const count = await runInDurableObject(stub, async (_instance, state) => (await state.storage.list({ prefix: 'event:' })).size);
-  expect(count).toBe(0);
+  const stub = await coordinator();
+  const hash = await sha256(installKey);
+  await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.put(Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`event:stored-${i}`, { expires: Date.now() + 600_000, completed: [] }])));
+    const list = vi.spyOn(state.storage, 'list');
+    expect(await instance.handle(hash, { action: 'notify', event: notification })).toEqual({ status: 200, result: 'accepted' });
+    expect(list).not.toHaveBeenCalled();
+  });
+  expect(ApnsSender.prototype.send).toHaveBeenCalledTimes(1);
+});
+
+it('reads only the registry and activity key for progress without an activity, and writes nothing', async () => {
+  await register();
+  const stub = await coordinator();
+  const hash = await sha256(installKey);
+  const activityKey = `activity:${device.device_token}:${await sha256(progress.session_id)}`;
+  await runInDurableObject(stub, async (instance, state) => {
+    const spies = (['get', 'list', 'put', 'delete', 'getAlarm', 'setAlarm'] as const).map(method => vi.spyOn(state.storage, method));
+    expect(await instance.handle(hash, { action: 'notify', event: progress })).toEqual({ status: 200, result: 'accepted' });
+    expect(spies[0]?.mock.calls.map(([key]) => key)).toEqual(['devices', activityKey]);
+    for (const spy of spies.slice(1)) expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+it('sends a replayed progress event once and stores no receipt for it', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+  await registerActivity();
+  await request('notify', 'POST', progress);
+  // A replay inside the hold window must not be held and flushed by the alarm...
+  clock.mockReturnValue(1_800_000_000_100);
+  await request('notify', 'POST', progress);
+  clock.mockReturnValue(1_800_000_001_000);
+  await runDurableObjectAlarm(await coordinator());
+  // ...nor sent again once the window has passed.
+  clock.mockReturnValue(1_800_000_005_000);
+  await request('notify', 'POST', progress);
+  expect(ApnsSender.prototype.send).toHaveBeenCalledTimes(1);
+  // Only the alarm's legacy-pass marker; the progress event stored no receipt.
+  const receipts = await runInDurableObject(await coordinator(), async (_instance, state) => [...(await state.storage.list({ prefix: 'event:' })).keys()]);
+  expect(receipts).toEqual(['event:~indexed']);
+});
+
+it('wakes for the earliest held update when several devices hold in one request', async () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+  const second = '2'.repeat(64);
+  const activity = (token: string) => request(`devices/${token}/activities/${encodeURIComponent(progress.session_id)}`, 'PUT', { activity_token: 'f'.repeat(64) });
+  await register();
+  await request('devices', 'POST', { ...device, device_token: second });
+  await activity(second);
+  await request('notify', 'POST', progress);
+  clock.mockReturnValue(1_800_000_000_500);
+  await activity(device.device_token);
+  await request('notify', 'POST', { ...progress, event_id: '1'.repeat(32) });
+  clock.mockReturnValue(1_800_000_001_000);
+  await runDurableObjectAlarm(await coordinator());
+  // The first device last sent at +500 and the second at +1000, so they hold until +1500 and +2000.
+  clock.mockReturnValue(1_800_000_001_200);
+  await request('notify', 'POST', { ...progress, event_id: '2'.repeat(32), tool_calls: 2 });
+  const alarm = await runInDurableObject(await coordinator(), (_instance, state) => state.storage.getAlarm());
+  expect(alarm).toBe(1_800_000_001_500);
+});
+
+it('lets the plugin retry a progress event that APNs asked to retry', async () => {
+  await registerActivity();
+  vi.mocked(ApnsSender.prototype.send).mockResolvedValueOnce('retry');
+  expect((await request('notify', 'POST', progress)).status).toBe(503);
+  expect((await request('notify', 'POST', progress)).status).toBe(200);
+  expect(ApnsSender.prototype.send).toHaveBeenCalledTimes(2);
 });
 
 it('does not acknowledge delivery when the authoritative KV revision is unavailable', async () => {
