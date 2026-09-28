@@ -36,9 +36,10 @@ PROGRESS_STATUSES = frozenset({"running", "waiting", "done", "failed"})
 TITLE_CHARS = 80
 SUBTITLE_CHARS = 120
 BODY_CHARS = 400
-# Only a text's head is flattened: unpaired delimiters on one long line make the scan quadratic,
-# and no banner shows more than a few hundred characters.
-FLATTEN_CHARS = 4000
+# Only a text's head is flattened, and the rest is dropped rather than shown raw: unpaired
+# delimiters on one long line make the scan quadratic, and no banner shows more than a few
+# hundred characters. The head is long enough for markup-heavy openings (long link URLs).
+FLATTEN_CHARS = 8000
 
 
 def _as_text(value: Any) -> str:
@@ -66,7 +67,8 @@ _STASHED = re.compile(r"\x00(\d+)\x00")
 
 # Applied in order to the text around the code. Block markers only count at a line start, so
 # this runs while the newlines are still there. Emphasis follows CommonMark flanking: an opener
-# is followed by non-space, a closer preceded by non-space (so ``2 * 3 * 4`` stays), and ``_``
+# is followed by non-space, a closer preceded by non-space (so ``2 * 3 * 4`` stays), a ``*``
+# between a word and punctuation is literal (so ``2*(n-1)*k`` and ``f(*args)`` stay), and ``_``
 # never opens or closes inside a word (so ``snake_case_name`` stays).
 _MARKDOWN = [
     (re.compile(r"^[ \t]*(?:>[ \t]?)+", re.M), ""),  # blockquote markers
@@ -74,10 +76,14 @@ _MARKDOWN = [
     (re.compile(r"^[ \t]*#{1,6}[ \t]+", re.M), ""),  # heading markers; `C#` and `#tag` stay
     (re.compile(r"^[ \t]*[-*+][ \t]+", re.M), ""),  # list bullets
     (re.compile(r"!?\[([^\]]*)\]\((?:[^()]|\([^()]*\))*\)"), r"\1"),  # links and images
-    (re.compile(r"(?<!\*)\*\*(?!\s)(.+?)(?<!\s)\*\*(?!\*)"), r"\1"),
+    # The `*` rules match the literal before checking flanking, so a long line of unpaired
+    # asterisks stays cheap to scan.
+    (re.compile(r"\*\*(?:(?<![\w*]\*\*)(?=\S)|(?<=\w\*\*)(?=\w))(.+?)"
+                r"\*\*(?<=\S\*\*)(?:(?![\w*])|(?<=\w\*\*)(?=\w))"), r"\1"),
     (re.compile(r"(?<!\w)__(?!\s)(.+?)(?<!\s)__(?!\w)"), r"\1"),
     (re.compile(r"(?<!~)~~(?!\s)(.+?)(?<!\s)~~(?!~)"), r"\1"),
-    (re.compile(r"(?<!\*)\*(?![\s*])(.+?)(?<![\s*])\*(?!\*)"), r"\1"),
+    (re.compile(r"\*(?:(?<![\w*]\*)(?=[^\s*])|(?<=\w\*)(?=\w))(.+?)"
+                r"\*(?<=[^\s*]\*)(?:(?![\w*])|(?<=\w\*)(?=\w))"), r"\1"),
     (re.compile(r"(?<!\w)_(?![\s_])(.+?)(?<![\s_])_(?!\w)"), r"\1"),
 ]
 
@@ -100,7 +106,7 @@ def _clip(text: Any, limit: int, *, markdown: bool) -> str:
     """Flatten first, then collapse whitespace and clip, so the budget is spent on words."""
     text = _as_text(text)
     if markdown:
-        text = _plain(text[:FLATTEN_CHARS]) + text[FLATTEN_CHARS:]
+        text = _plain(text[:FLATTEN_CHARS])
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1] + "\u2026"
 
@@ -108,7 +114,7 @@ def _clip(text: Any, limit: int, *, markdown: bool) -> str:
 def preview(*, title: Any, body: Any, profile: str, subtitle: Any = "", request_id: str = "",
             markdown: bool = True) -> dict[str, str]:
     """The sealed banner content. iOS banners render plain text, so markdown is flattened before
-    sealing; ``markdown=False`` keeps text that is not markdown, like a shell command, verbatim."""
+    sealing; ``markdown=False`` leaves text that is not markdown, like a shell command, unflattened."""
     return {
         "title": _clip(title, TITLE_CHARS, markdown=markdown),
         "subtitle": _clip(subtitle, SUBTITLE_CHARS, markdown=markdown),

@@ -58,6 +58,8 @@ def test_preview_flattens_code_blocks_lists_and_quotes_to_one_line():
 def test_preview_leaves_text_that_only_contains_markdown_characters():
     body = "2 * 3 * 4 = 24\nsnake_case_name, C# and\n#hashtag"
     assert preview(title="t", body=body, profile="p")["body"] == "2 * 3 * 4 = 24 snake_case_name, C# and #hashtag"
+    body = "2*(n-1)*k, f(*args) and g(*rest), x**(1/2) + y**(1/3)"
+    assert preview(title="t", body=body, profile="p")["body"] == body
 
 
 def test_plain_preview_is_still_the_sealed_fixture():
@@ -71,6 +73,9 @@ def test_preview_clips_after_flattening():
     assert p["body"] == "the docs are ready"
     p = preview(title="t", body="**word** " * 100, profile="p")
     assert len(p["body"]) == 400 and "*" not in p["body"]
+    # A link longer than the first few thousand characters still flattens instead of leaking raw.
+    body = f"Here's the chart:\n\n![chart](data:image/png;base64,{'A' * 6600})\n\nThe trend is up."
+    assert preview(title="t", body=body, profile="p")["body"] == "Here's the chart: chart The trend is up."
 
 
 def test_unknown_kind_and_status_are_rejected(keys):
