@@ -41,11 +41,17 @@ def test_preview_seals_the_bot_name_clipped_and_only_when_known():
     assert "bot_name" not in preview(title="t", body="b", profile="p", bot_name="  ")
 
 
+def test_preview_keeps_the_title_literal():
+    # The title is the bot's name and a fixed label, never agent markdown: flattening would
+    # show older app builds a different name than the roster's.
+    p = preview(title="# 1 *Lab* · Question", body="b", profile="p", bot_name="# 1 *Lab*")
+    assert p["title"] == "# 1 *Lab* · Question" and p["bot_name"] == "# 1 *Lab*"
+
+
 def test_preview_drops_emphasis_code_and_heading_markers():
     # The body is the banner reported in hermex#583.
-    p = preview(title="## Summary", subtitle="__strong__ *it* _em_ ~~old~~ run `npm test`",
+    p = preview(title="t", subtitle="## __strong__ *it* _em_ ~~old~~ run `npm test`",
                 body="Here's one: **The 1×1 Pixel** The iOS simulator test failed again.", profile="p")
-    assert p["title"] == "Summary"
     assert p["subtitle"] == "strong it em old run npm test"
     assert p["body"] == "Here's one: The 1×1 Pixel The iOS simulator test failed again."
 

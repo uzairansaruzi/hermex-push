@@ -76,9 +76,10 @@ install_key>`. `bot_name` is the name Hermex's bot roster shows (the Desktop tit
 `profile.yaml` for each banner and clipped to 80 characters. Hermex builds the banner title from it
 and `kind` in the phone's language; `title` carries the same in English (`<name> · Approval
 needed`, `· Question`, `· Turn failed`, the name alone for a reply) for older app builds.
-Banners render no markdown, so title, subtitle and body are flattened to plain text and then
-clipped to 80, 120 and 400 characters. Approval banners are not flattened: their
-body is a shell command, so it is only whitespace-collapsed and clipped.
+Banners render no markdown, so subtitle and body are flattened to plain text before title,
+subtitle and body are clipped to 80, 120 and 400 characters. The title is never flattened,
+because it is the bot's name and a fixed label; neither is an approval banner, because its body
+is a shell command.
 A `null` seal means encryption failed on the host; the phone shows a generic
 banner. `event_id` is stable per turn or request for relay dedupe; `thread_id` and
 `collapse_id` are stable per session. All three are HMAC-SHA256 keyed from the install key.
