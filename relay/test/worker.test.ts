@@ -145,6 +145,25 @@ it('alerts a finished run once when the plugin retries after a failed end', asyn
   expect(sent()).toEqual(['update:Response complete', 'end', 'end']);
 });
 
+it('reserves the end alert before APNs, so a request that dies after the alert never alerts twice', async () => {
+  await registerActivity();
+  const done = { ...progress, status: 'done' } as const;
+  // A throw skips every later write, as a Durable Object reset would.
+  vi.mocked(ApnsSender.prototype.send).mockResolvedValueOnce('sent').mockRejectedValueOnce(new Error('reset'));
+  expect((await request('notify', 'POST', done)).status).toBe(503);
+  expect((await request('notify', 'POST', done)).status).toBe(200);
+  expect(sent()).toEqual(['update:Response complete', 'end', 'end']);
+});
+
+it('sends the end alert again on the plugin retry when APNs refused it', async () => {
+  await registerActivity();
+  const failed = { ...progress, status: 'failed' } as const;
+  vi.mocked(ApnsSender.prototype.send).mockResolvedValueOnce('retry');
+  expect((await request('notify', 'POST', failed)).status).toBe(503);
+  expect((await request('notify', 'POST', failed)).status).toBe(200);
+  expect(sent()).toEqual(['update:Response failed', 'update:Response failed', 'end']);
+});
+
 it('ends a finished run silently with Replies off, but still alerts a failed one', async () => {
   await request('devices', 'POST', { ...device, prefs: { replies: false } });
   for (const session of [progress.session_id, 'session/two']) {

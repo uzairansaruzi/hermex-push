@@ -15,7 +15,7 @@ interface Activity {
   timing?: ActivityTiming;
   /** Newest progress applied; `event` is set once it was sent or held, so a plugin retry of it is a replay. */
   latest?: { started: number; sent: number; event?: string };
-  /** The end event whose alerting update went out, so a plugin retry after a failed `end` sends only the `end`. */
+  /** The end event whose alert APNs accepted (reserved before the send), so a plugin retry after a failed `end` sends only the `end`. */
   alerted?: string;
   ended?: boolean;
   pending?: { event: ProgressEvent; due: number; attempts: number };
@@ -262,8 +262,11 @@ export class InstallCoordinator extends DurableObject<Env> {
     // The run's end alerts once, on an update awaited ahead of the silent `end` so the relay sends them in order.
     const alert = endAlert(event, device, seconds);
     if (alert && activity.alerted !== event.event_id) {
+      // Reserve before APNs, as banners do: a request that dies after acceptance cannot alert twice.
+      activity.alerted = event.event_id;
+      await this.ctx.storage.put(key, activity);
       result = await this.sender.send(endAlertPush(event, device, activity.token, alert, seconds));
-      if (result === 'sent') activity.alerted = event.event_id;
+      if (result !== 'sent') delete activity.alerted;
     }
     if (result === 'sent') result = await this.sender.send(activityPush(event, device, activity.token, timing.priority, seconds));
     if (result === 'invalid-token') { await this.ctx.storage.delete(key); return 'sent'; }
