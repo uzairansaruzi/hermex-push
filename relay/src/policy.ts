@@ -20,13 +20,29 @@ export function deliveryPolicy(event: PushEvent, device: Device, hasActivity: bo
   if (hasActivity && event.kind !== 'approval' && event.kind !== 'clarify') return { type: 'none' };
   const prefs = device.prefs;
   if (event.is_subagent && prefs.mute_subagents) return { type: 'none' };
-  if (event.kind === 'reply' && (!prefs.replies || (
-    prefs.presence_suppression && prefs.active_session_id === event.session_id && prefs.active_until > now
-  ))) return { type: 'none' };
+  if (event.kind === 'reply' && !repliesAllowed(event.session_id, prefs, now)) return { type: 'none' };
   return {
     type: 'banner', interruption: event.kind === 'reply' ? 'active' : 'time-sensitive',
     collapseId: event.collapse_id, threadId: event.thread_id, preview: prefs.previews, hold: holds[event.kind],
   };
+}
+
+/** Replies on, and the session not on screen under an opted-in presence lease (`now` in seconds). */
+function repliesAllowed(session: string, prefs: Device['prefs'], now: number) {
+  return prefs.replies && !(prefs.presence_suppression && prefs.active_session_id === session && prefs.active_until > now);
+}
+
+export type EndAlert = 'complete' | 'failed';
+
+/**
+ * Whether a run's end alerts once on its activity, standing in for the banner the activity replaces:
+ * `done` follows the reply banner's rules, `failed` the turn-error banner's (only the subagent mute).
+ */
+export function endAlert(event: ProgressEvent, device: Device, now: number): EndAlert | null {
+  if (event.status !== 'done' && event.status !== 'failed') return null;
+  if (event.is_subagent && device.prefs.mute_subagents) return null;
+  if (event.status === 'failed') return 'failed';
+  return repliesAllowed(event.session_id, device.prefs, now) ? 'complete' : null;
 }
 
 export interface ActivityTiming { status: ProgressEvent['status']; lastSent: number }

@@ -23,6 +23,15 @@ async function registerActivity() {
   expect((await request(`devices/${device.device_token}/activities/${encodeURIComponent(progress.session_id)}`, 'PUT', { activity_token: 'f'.repeat(64) })).status).toBe(200);
 }
 
+/** Each push sent so far: `banner`, an activity's `aps.event`, or `update:<loc-key>` for the one that alerts. */
+function sent() {
+  return vi.mocked(ApnsSender.prototype.send).mock.calls.map(([push]) => {
+    if (push.type === 'alert') return 'banner';
+    const { aps } = push.payload as { aps: { event: string; alert?: { body: { 'loc-key': string } } } };
+    return aps.alert ? `${aps.event}:${aps.alert.body['loc-key']}` : aps.event;
+  });
+}
+
 beforeEach(() => { vi.spyOn(ApnsSender.prototype, 'send').mockResolvedValue('sent'); });
 afterEach(async () => { vi.restoreAllMocks(); await reset(); });
 
@@ -107,7 +116,7 @@ it('coalesces routine progress to the latest value and flushes with an alarm', a
   expect(vi.mocked(ApnsSender.prototype.send).mock.calls[1]?.[0]).toMatchObject({ priority: '5', payload: { aps: { 'content-state': { tool_calls: 3 }, 'stale-date': 1_800_000_901 } } });
 });
 
-it('sends status changes immediately, supersedes held progress, and suppresses the completion banner', async () => {
+it('sends status changes immediately, supersedes held progress, and alerts the end instead of bannering the reply', async () => {
   const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
   await registerActivity();
   await request('notify', 'POST', progress);
@@ -116,15 +125,34 @@ it('sends status changes immediately, supersedes held progress, and suppresses t
   await request('notify', 'POST', { ...progress, event_id: '2'.repeat(32), status: 'waiting' });
   await request('notify', 'POST', { ...progress, event_id: '3'.repeat(32), status: 'done' });
   await request('notify', 'POST', notification);
-  expect(ApnsSender.prototype.send).toHaveBeenCalledTimes(3);
-  expect(vi.mocked(ApnsSender.prototype.send).mock.calls.every(([push]) => push.type === 'liveactivity' && push.priority === '10')).toBe(true);
+  expect(sent()).toEqual(['update', 'update', 'update:Response complete', 'end']);
+  expect(vi.mocked(ApnsSender.prototype.send).mock.calls.every(([push]) => push.priority === '10')).toBe(true);
   clock.mockReturnValue(1_800_000_001_000);
   await runDurableObjectAlarm(await coordinator());
-  expect(ApnsSender.prototype.send).toHaveBeenCalledTimes(3);
+  expect(ApnsSender.prototype.send).toHaveBeenCalledTimes(4);
   // A new turn without a newly registered activity gets banners again.
   await request('notify', 'POST', { ...progress, event_id: '4'.repeat(32), started_at: progress.started_at + 20, sent_at: progress.sent_at + 20 });
   await request('notify', 'POST', { ...notification, event_id: '5'.repeat(32) });
-  expect(vi.mocked(ApnsSender.prototype.send).mock.calls[3]?.[0].type).toBe('alert');
+  expect(sent()[4]).toBe('banner');
+});
+
+it('alerts a finished run once when the plugin retries after a failed end', async () => {
+  await registerActivity();
+  const done = { ...progress, status: 'done' } as const;
+  vi.mocked(ApnsSender.prototype.send).mockResolvedValueOnce('sent').mockResolvedValueOnce('retry');
+  expect((await request('notify', 'POST', done)).status).toBe(503);
+  expect((await request('notify', 'POST', done)).status).toBe(200);
+  expect(sent()).toEqual(['update:Response complete', 'end', 'end']);
+});
+
+it('ends a finished run silently with Replies off, but still alerts a failed one', async () => {
+  await request('devices', 'POST', { ...device, prefs: { replies: false } });
+  for (const session of [progress.session_id, 'session/two']) {
+    await request(`devices/${device.device_token}/activities/${encodeURIComponent(session)}`, 'PUT', { activity_token: 'f'.repeat(64) });
+  }
+  await request('notify', 'POST', { ...progress, status: 'done' });
+  await request('notify', 'POST', { ...progress, event_id: '1'.repeat(32), session_id: 'session/two', status: 'failed' });
+  expect(sent()).toEqual(['end', 'update:Response failed', 'end']);
 });
 
 it('banners an approval during an activity while its waiting update stays silent', async () => {
@@ -186,7 +214,7 @@ it('deleting an ended activity removes its token without reintroducing a complet
   await request('notify', 'POST', { ...progress, status: 'done' });
   await request(`devices/${device.device_token}/activities/${encodeURIComponent(progress.session_id)}`, 'DELETE');
   await request('notify', 'POST', notification);
-  expect(ApnsSender.prototype.send).toHaveBeenCalledTimes(1);
+  expect(sent()).toEqual(['update:Response complete', 'end']);
   const stored = await runInDurableObject(await coordinator(), async (_instance, state) => JSON.stringify([...await state.storage.list({ prefix: 'activity:' })]));
   expect(stored).not.toContain('f'.repeat(64));
 });

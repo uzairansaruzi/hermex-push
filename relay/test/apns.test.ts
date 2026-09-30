@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { ApnsSender, activityPush, bannerPush } from '../src/apns';
+import { ApnsSender, activityPush, bannerPush, endAlertPush } from '../src/apns';
 import { deliveryPolicy } from '../src/policy';
 import { device, installKey, notification, progress } from './fixtures';
 import { sha256 } from '../src/contract';
@@ -49,7 +49,20 @@ it.each([['approval', 300], ['clarify', 3600], ['reply', 3600], ['turn_error', 3
 it('uses versioned activity state, stale dates, end events, and the activity topic', () => {
   const push = activityPush({ ...progress, status: 'done' }, device, 'token', '10', 5000);
   expect(push.topic).toBe('com.uzairansar.hermesmobile.push-type.liveactivity');
-  expect(push.payload).toEqual({ aps: { timestamp: 5000, event: 'end', 'stale-date': 5900, 'content-state': { v: 1, status: 'done', tool: 'terminal', tool_calls: 1, started_at: progress.started_at, updated_at: 5000 } } });
+  expect(push.payload).toEqual({ aps: { timestamp: 5000, event: 'end', 'stale-date': 5900, 'dismissal-date': 5300, 'content-state': { v: 1, status: 'done', tool: 'terminal', tool_calls: 1, started_at: progress.started_at, updated_at: 5000 } } });
+  // A failed run leaves the Lock Screen sooner, as the app's own local end does.
+  expect(activityPush({ ...progress, status: 'failed' }, device, 'token', '10', 5000).payload).toMatchObject({ aps: { event: 'end', 'dismissal-date': 5030 } });
+  expect(activityPush(progress, device, 'token', '5', 5000).payload).not.toHaveProperty('aps.dismissal-date');
+});
+
+it.each([['complete', 'done', 'Response complete'], ['failed', 'failed', 'Response failed']] as const)('alerts a %s run on a final update, held like its end', (alert, status, key) => {
+  const push = endAlertPush({ ...progress, status }, device, 'token', alert, 5000);
+  expect(push).toMatchObject({ topic: 'com.uzairansar.hermesmobile.push-type.liveactivity', type: 'liveactivity', priority: '10', expiration: 5900 });
+  expect(push.payload).toEqual({ aps: {
+    timestamp: 5000, event: 'update', 'stale-date': 5900,
+    alert: { title: 'Hermex', body: { 'loc-key': key }, sound: 'default' },
+    'content-state': { v: 1, status, tool: 'terminal', tool_calls: 1, started_at: progress.started_at, updated_at: 5000 },
+  } });
 });
 
 it.each(['sandbox', 'production'] as const)('sends to %s with APNs headers and no redirects', async environment => {

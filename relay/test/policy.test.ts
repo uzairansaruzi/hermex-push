@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activityTiming, deliveryPolicy } from '../src/policy';
+import { activityTiming, deliveryPolicy, endAlert } from '../src/policy';
 import { device, notification, progress } from './fixtures';
 
 describe('delivery policy', () => {
@@ -39,5 +39,28 @@ describe('delivery policy', () => {
     expect(activityTiming(progress, previous, 1999)).toEqual({ send: false, priority: '5' });
     expect(activityTiming(progress, previous, 2000)).toEqual({ send: true, priority: '5' });
     for (const status of ['waiting', 'done', 'failed'] as const) expect(activityTiming({ ...progress, status }, previous, 1001)).toEqual({ send: true, priority: '10' });
+  });
+});
+
+// `done` follows the reply banner's rules and `failed` the turn-error banner's (hermex#888).
+describe('end alert', () => {
+  const present = { presence_suppression: true, active_session_id: progress.session_id, active_until: 100 };
+  it.each([
+    ['done', {}, false, 'complete'],
+    ['done', { replies: false }, false, null],
+    ['done', {}, true, null],
+    ['done', { mute_subagents: false }, true, 'complete'],
+    ['done', present, false, null],
+    ['failed', {}, false, 'failed'],
+    ['failed', { replies: false }, false, 'failed'],
+    ['failed', {}, true, null],
+    ['failed', { mute_subagents: false }, true, 'failed'],
+    ['failed', present, false, 'failed'],
+  ] as const)('%s with prefs %o and subagent %s alerts %s', (status, prefs, isSubagent, expected) => {
+    expect(endAlert({ ...progress, status, is_subagent: isSubagent }, { ...device, prefs: { ...device.prefs, ...prefs } }, 99)).toBe(expected);
+  });
+  it('never alerts running or waiting progress, and a lapsed presence lease no longer silences done', () => {
+    for (const status of ['running', 'waiting'] as const) expect(endAlert({ ...progress, status }, device, 0)).toBeNull();
+    expect(endAlert({ ...progress, status: 'done' }, { ...device, prefs: { ...device.prefs, ...present } }, 100)).toBe('complete');
   });
 });

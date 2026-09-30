@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
-import { ApnsSender, senderFor, activityPush, bannerPush, type ApnsSecrets, type SendResult } from './apns';
+import { ApnsSender, senderFor, activityPush, bannerPush, endAlertPush, type ApnsSecrets, type SendResult } from './apns';
 import { sha256, type Command, type Device, type NotificationEvent, type ProgressEvent } from './contract';
-import { activityTiming, deliveryPolicy, type ActivityTiming } from './policy';
+import { activityTiming, deliveryPolicy, endAlert, type ActivityTiming } from './policy';
 
 export interface Env extends ApnsSecrets {
   hermex_relay: KVNamespace;
@@ -15,6 +15,8 @@ interface Activity {
   timing?: ActivityTiming;
   /** Newest progress applied; `event` is set once it was sent or held, so a plugin retry of it is a replay. */
   latest?: { started: number; sent: number; event?: string };
+  /** The end event whose alerting update went out, so a plugin retry after a failed `end` sends only the `end`. */
+  alerted?: string;
   ended?: boolean;
   pending?: { event: ProgressEvent; due: number; attempts: number };
 }
@@ -255,7 +257,15 @@ export class InstallCoordinator extends DurableObject<Env> {
     }
     // A status transition supersedes a held routine update.
     delete activity.pending;
-    const result = await this.sender.send(activityPush(event, device, activity.token, timing.priority, Math.floor(now / 1000)));
+    const seconds = Math.floor(now / 1000);
+    let result: SendResult = 'sent';
+    // The run's end alerts once, on an update awaited ahead of the silent `end` so the relay sends them in order.
+    const alert = endAlert(event, device, seconds);
+    if (alert && activity.alerted !== event.event_id) {
+      result = await this.sender.send(endAlertPush(event, device, activity.token, alert, seconds));
+      if (result === 'sent') activity.alerted = event.event_id;
+    }
+    if (result === 'sent') result = await this.sender.send(activityPush(event, device, activity.token, timing.priority, seconds));
     if (result === 'invalid-token') { await this.ctx.storage.delete(key); return 'sent'; }
     if (result === 'sent') {
       activity.latest.event = event.event_id;

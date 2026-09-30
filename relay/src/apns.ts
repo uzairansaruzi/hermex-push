@@ -1,5 +1,5 @@
 import type { Device, NotificationEvent, ProgressEvent } from './contract';
-import type { Delivery } from './policy';
+import type { Delivery, EndAlert } from './policy';
 
 export interface ApnsSecrets { APNS_KEY_ID: string; APNS_TEAM_ID: string; APNS_PRIVATE_KEY: string }
 /** `expiration` is the UNIX second until which APNs stores the push for an offline phone; 0 tries once and never stores. */
@@ -90,19 +90,37 @@ export function bannerPush(event: NotificationEvent, device: Device, installHash
   return { token: device.device_token, topic: device.bundle_id, environment: device.environment, type: 'alert', priority: '10', expiration: now + policy.hold, collapseId: policy.collapseId, payload };
 }
 
-export function activityPush(event: ProgressEvent, device: Device, token: string, priority: '5' | '10', now: number): Push {
+/** `aps` adds the push's `event` and its end-only keys to the shared activity state. */
+function liveActivityPush(event: ProgressEvent, device: Device, token: string, priority: '5' | '10', now: number, aps: object): Push {
   const end = event.status === 'done' || event.status === 'failed';
   return {
     token, topic: `${device.bundle_id}.push-type.liveactivity`, environment: device.environment,
     // A late update is superseded anyway, but a phone offline at the end still needs it until the stale date.
     type: 'liveactivity', priority, expiration: end ? now + 900 : 0,
     payload: { aps: {
-      timestamp: now, event: end ? 'end' : 'update',
-      'stale-date': now + 900,
+      timestamp: now, 'stale-date': now + 900,
       // updated_at lets the widget say how fresh the state is; the phone cannot see `timestamp`.
       'content-state': {
         v: 1, status: event.status, tool: event.tool, tool_calls: event.tool_calls, started_at: event.started_at, updated_at: now,
       },
+      ...aps,
     } },
   };
+}
+
+/** `done` and `failed` send `end`, which leaves the Lock Screen when the app's own local end would remove it. */
+export function activityPush(event: ProgressEvent, device: Device, token: string, priority: '5' | '10', now: number): Push {
+  if (event.status !== 'done' && event.status !== 'failed') return liveActivityPush(event, device, token, priority, now, { event: 'update' });
+  return liveActivityPush(event, device, token, priority, now, { event: 'end', 'dismissal-date': now + (event.status === 'done' ? 300 : 30) });
+}
+
+/**
+ * The final update that alerts once, sent just before the silent `end`: ActivityKit documents alerts on
+ * updates only. iOS resolves the `loc-key` from the app's String Catalog; only Apple Watch shows the text.
+ */
+export function endAlertPush(event: ProgressEvent, device: Device, token: string, alert: EndAlert, now: number): Push {
+  return liveActivityPush(event, device, token, '10', now, {
+    event: 'update',
+    alert: { title: 'Hermex', body: { 'loc-key': alert === 'complete' ? 'Response complete' : 'Response failed' }, sound: 'default' },
+  });
 }
