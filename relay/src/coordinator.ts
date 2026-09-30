@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { ApnsSender, senderFor, activityPush, bannerPush, endAlertPush, type ApnsSecrets, type SendResult } from './apns';
-import { sha256, type Command, type Device, type NotificationEvent, type ProgressEvent } from './contract';
+import { canonicalJson, sha256, type Command, type Device, type NotificationEvent, type ProgressEvent } from './contract';
 import { activityTiming, deliveryPolicy, endAlert, type ActivityTiming } from './policy';
 
 export interface Env extends ApnsSecrets {
@@ -32,6 +32,8 @@ const dueKey = (at: number, key = '') => `due:${String(at).padStart(15, '0')}:${
 const sweepAt = (expires: number) => Math.ceil(expires / 60_000) * 60_000;
 // Marks the legacy pass done. Event ids are hex, so this key never collides with a receipt.
 const indexedKey = 'event:~indexed';
+// SHA-256 of the canonical record the device's KV revision holds; written with its registry pointer.
+const digestKey = (token: string) => `digest:${token}`;
 
 /** One serial owner per install. KV values are immutable; durable pointers make deletes immediate. */
 export class InstallCoordinator extends DurableObject<Env> {
@@ -79,9 +81,9 @@ export class InstallCoordinator extends DurableObject<Env> {
     const key = registry[token];
     delete registry[token];
     await this.ctx.storage.put('devices', registry);
-    // Bounded by the 64-activity cap; runs only on revocation.
+    // Bounded by the 64-activity cap; runs only on revocation. Dropping the digest makes the next registration write.
     const activities = await this.ctx.storage.list({ prefix: `activity:${token}:` });
-    await this.ctx.storage.delete([...activities.keys()]);
+    await this.ctx.storage.delete([...activities.keys(), digestKey(token)]);
     if (key) await this.env.hermex_relay.delete(key);
   }
 
@@ -118,13 +120,17 @@ export class InstallCoordinator extends DurableObject<Env> {
     switch (command.action) {
       case 'register': {
         const token = command.device.device_token;
-        if (!registry[token] && Object.keys(registry).length >= 32) return { status: 409, result: 'device_limit' };
         const previous = registry[token];
+        if (!previous && Object.keys(registry).length >= 32) return { status: 409, result: 'device_limit' };
+        const digest = await sha256(canonicalJson(command.device));
+        // The app re-registers on every launch; an identical record skips the paid KV put and delete.
+        if (previous && await this.ctx.storage.get<string>(digestKey(token)) === digest) return ok();
         const key = `installs:${installHash}:devices:${token}:${crypto.randomUUID()}`;
         // Unique revisions avoid KV's one-write-per-key-per-second restriction.
         await this.env.hermex_relay.put(key, JSON.stringify(command.device));
         registry[token] = key;
-        await this.ctx.storage.put('devices', registry);
+        // One call keeps the pointer and the digest of the record it points to atomic.
+        await this.ctx.storage.put({ devices: registry, [digestKey(token)]: digest });
         if (previous) await this.env.hermex_relay.delete(previous);
         return ok();
       }
