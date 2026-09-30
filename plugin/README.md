@@ -79,7 +79,9 @@ banner. `event_id` is stable per turn or request for relay dedupe; `thread_id` a
 `collapse_id` are stable per session. All three are HMAC-SHA256 keyed from the install key.
 
 Progress (Live Activity state, routine updates at most one per session every five seconds,
-status changes always through):
+status changes always through). When the relay answers `no_activity` (no phone shows a Live
+Activity for the session), routine updates slow to one a minute after the turn's first 30
+seconds; the next update the relay answers otherwise restores the five-second cadence:
 
 ```json
 {"v": 1, "kind": "progress", "event_id": "…", "thread_id": "…", "session_id": "…", "source": "bot",

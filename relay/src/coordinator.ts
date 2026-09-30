@@ -214,7 +214,11 @@ export class InstallCoordinator extends DurableObject<Env> {
     return retry ? { status: 503, result: rejected ? 'apns_rejected' : 'delivery_retry' } : ok(existing ? 'deduplicated' : 'accepted');
   }
 
-  /** Progress keeps no receipt: each activity's `latest` orders events and recognizes replays. */
+  /**
+   * Progress keeps no receipt: each activity's `latest` orders events and recognizes replays.
+   * Answers `no_activity` when no device shows an activity for the session, so the plugin can slow
+   * routine updates nobody watches; the phone registers activities with the relay only.
+   */
   private async notifyProgress(event: ProgressEvent, registry: Registry): Promise<Outcome> {
     const now = Date.now();
     const found = await Promise.all(Object.entries(registry).map(async ([token, ref]) => {
@@ -231,6 +235,7 @@ export class InstallCoordinator extends DurableObject<Env> {
       return { ref, key, activity };
     }));
     const active = found.flatMap(({ ref, key, activity }) => activity ? [{ ref, key, activity }] : []);
+    if (active.length === 0) return ok('no_activity');
     // Only devices with an activity need their KV revision; read them all before any send.
     const targets = await Promise.all(active.map(async target => ({ ...target, device: await this.device(target.ref) })));
     const deliveries = await Promise.allSettled(targets.map(({ key, activity, device }) =>

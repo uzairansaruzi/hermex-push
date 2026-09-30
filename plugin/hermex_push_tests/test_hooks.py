@@ -172,7 +172,7 @@ def test_scheduler_failure_does_not_wedge_flushing(keys, sender):
 
 def test_close_stops_the_relay_thread():
     from hermex_push.relay import RelaySender
-    sender = RelaySender(post=lambda u, b: 200)
+    sender = RelaySender(post=lambda u, b: (200, "accepted"))
     p = HermexPush(sender=sender, keys_loader=lambda: None, relay_url=lambda: "", schedule=lambda d, f: None)
     sender.enqueue("https://r/installs/k/notify", {"kind": "reply"})
     sender.wait_idle()
@@ -255,3 +255,40 @@ def test_a_session_whose_hold_ends_first_is_not_kept_waiting_by_another(keys, se
     push.flush_progress()
     assert [e["session_id"] for _, e in sender.events] == ["b", "a", "b"]
     assert delays == [4.0, 1.5, 2.0]  # re-armed for a's hold
+
+
+def test_an_unwatched_turn_sends_routine_progress_once_a_minute_after_the_grace(keys, sender):
+    clock = {"now": 1000.0}
+    push = HermexPush(sender=sender, keys_loader=lambda: keys, relay_url=lambda: "https://r",
+                      now=lambda: clock["now"], schedule=lambda delay, fn: None)
+    sender.result = "no_activity"  # no phone shows a Live Activity for this session
+    push.pre_llm_call(session_id="s", platform="cli")
+    for second in range(1, 170):  # a tool boundary every second
+        clock["now"] = 1000.0 + second
+        push.pre_tool_call(tool_name="terminal", session_id="s")
+    push.pre_approval_request(command="ls", description="", session_id="s", surface="cli", request_id="r")
+    progress = [(e["sent_at"] - 1000, e["status"]) for _, e in sender.events if e["kind"] == "progress"]
+    # Five-second cadence through the 30 s grace, then one routine update a minute; waiting goes out at once.
+    assert progress == [(t, "running") for t in (0, 5, 10, 15, 20, 25, 30, 90, 150)] + [(169, "waiting")]
+    assert [e["kind"] for e in notifications(sender)] == ["approval"]
+
+
+def test_a_status_change_probes_and_a_watched_answer_restores_the_cadence(keys, sender):
+    clock = {"now": 1000.0}
+    push = HermexPush(sender=sender, keys_loader=lambda: keys, relay_url=lambda: "https://r",
+                      now=lambda: clock["now"], schedule=lambda delay, fn: None)
+    sender.result = "no_activity"
+    push.pre_llm_call(session_id="s", platform="desktop")
+    clock["now"] = 1030.0
+    push.pre_tool_call(tool_name="terminal", session_id="s")  # quiet until 1090
+    clock["now"] = 1040.0
+    push.pre_tool_call(tool_name="read_file", session_id="s")  # held
+    sender.result = "accepted"  # the phone has registered its activity
+    clock["now"] = 1041.0
+    push.pre_approval_request(command="ls", description="", session_id="s", surface="cli", request_id="r")
+    clock["now"] = 1042.0
+    push.post_approval_response(session_id="s")
+    clock["now"] = 1047.0
+    push.pre_tool_call(tool_name="search", session_id="s")  # five seconds after the last send
+    progress = [(e["sent_at"] - 1000, e["status"]) for _, e in sender.events if e["kind"] == "progress"]
+    assert progress == [(0, "running"), (30, "running"), (41, "waiting"), (42, "running"), (47, "running")]

@@ -22,8 +22,10 @@ logger = logging.getLogger("hermex_push")
 QUEUE_LIMIT = 256
 TIMEOUT_SECONDS = 10.0
 RETRY_DELAY_SECONDS = 2.0
+RESULT_BODY_LIMIT = 4096  # the relay answers {"result": "<word>"}
 
-PostFn = Callable[[str, bytes], int]  # (url, body) -> HTTP status
+PostFn = Callable[[str, bytes], tuple[int, str]]  # (url, body) -> (HTTP status, relay result)
+ResultFn = Callable[[str], None]
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 _STOP = object()
 
@@ -50,16 +52,25 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _opener = urllib.request.build_opener(_NoRedirect)
 
 
-def _urllib_post(url: str, body: bytes) -> int:
+def _result(raw: bytes) -> str:
+    """The relay's ``result`` word, or ``""`` for a body that is not the relay's JSON."""
+    try:
+        result = json.loads(raw).get("result")
+    except (ValueError, AttributeError):
+        return ""
+    return result if isinstance(result, str) else ""
+
+
+def _urllib_post(url: str, body: bytes) -> tuple[int, str]:
     request = urllib.request.Request(
         url, data=body, method="POST",
         headers={"Content-Type": "application/json", "User-Agent": f"hermex-push-plugin/{PLUGIN_VERSION}"},
     )
     try:
         with _opener.open(request, timeout=TIMEOUT_SECONDS) as response:
-            return response.status
+            return response.status, _result(response.read(RESULT_BODY_LIMIT))
     except urllib.error.HTTPError as exc:
-        return exc.code
+        return exc.code, ""
 
 
 class RelaySender:
@@ -72,9 +83,11 @@ class RelaySender:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
-    def enqueue(self, url: str, event: dict[str, Any]) -> bool:
+    def enqueue(self, url: str, event: dict[str, Any], on_result: Optional[ResultFn] = None) -> bool:
+        """Queue one event; ``on_result`` gets the relay's ``result`` on the drain thread after a
+        2xx, and is never called when delivery fails."""
         try:
-            self._queue.put_nowait((url, event))
+            self._queue.put_nowait((url, event, on_result))
         except queue.Full:
             logger.warning("hermex-push: relay queue full; dropping a %s event", event.get("kind"))
             return False
@@ -102,31 +115,33 @@ class RelaySender:
             if item is _STOP:
                 self._queue.task_done()
                 return
-            url, event = item
+            url, event, on_result = item
             try:
-                self.deliver(url, event)
+                self.deliver(url, event, on_result)
             except Exception:
                 logger.debug("hermex-push: relay delivery raised", exc_info=True)
             finally:
                 self._queue.task_done()
 
-    def deliver(self, url: str, event: dict[str, Any]) -> bool:
+    def deliver(self, url: str, event: dict[str, Any], on_result: Optional[ResultFn] = None) -> bool:
         """Synchronous POST with one retry on a network error or 5xx. Progress gets no retry: it
         would double traffic during a relay outage to resend a state the next update replaces.
         The turn's last progress (``done`` / ``failed``) keeps it: nothing follows to replace it,
         and the relay withholds the reply banner while the activity it ends still runs.
-        Never logs the body."""
+        A 2xx hands the relay's ``result`` to ``on_result``. Never logs the body."""
         body = json.dumps(event, separators=(",", ":")).encode("utf-8")
         replaceable = event.get("kind") == "progress" and event.get("status") not in ("done", "failed")
         attempts = 1 if replaceable else 2
         for attempt in range(1, attempts + 1):
             try:
-                status = self._post(url, body)
+                status, result = self._post(url, body)
             except Exception as exc:
-                status, reason = 0, type(exc).__name__
+                status, result, reason = 0, "", type(exc).__name__
             else:
                 reason = f"HTTP {status}"
             if 200 <= status < 300:
+                if on_result is not None:
+                    on_result(result)
                 return True
             if status and status < 500:
                 logger.warning("hermex-push: relay rejected a %s event (%s)", event.get("kind"), reason)
