@@ -4,15 +4,15 @@ import { device, notification, progress } from './fixtures';
 
 describe('delivery policy', () => {
   it('collapses and threads replies, but makes attention requests time-sensitive', () => {
-    expect(deliveryPolicy(notification, device, false, 0)).toEqual({ type: 'banner', interruption: 'active', collapseId: notification.collapse_id, threadId: notification.thread_id, preview: true });
+    expect(deliveryPolicy(notification, device, false, 0)).toEqual({ type: 'banner', interruption: 'active', collapseId: notification.collapse_id, threadId: notification.thread_id, preview: true, hold: 3600 });
     for (const kind of ['approval', 'clarify', 'turn_error'] as const) {
       expect(deliveryPolicy({ ...notification, kind }, device, false, 0)).toMatchObject({ type: 'banner', interruption: 'time-sensitive' });
     }
   });
   it('lets an activity replace reply and error banners but not attention requests, and never banners progress', () => {
     for (const kind of ['reply', 'turn_error'] as const) expect(deliveryPolicy({ ...notification, kind }, device, true, 0)).toEqual({ type: 'none' });
-    for (const kind of ['approval', 'clarify'] as const) {
-      expect(deliveryPolicy({ ...notification, kind }, device, true, 0)).toEqual({ type: 'banner', interruption: 'time-sensitive', collapseId: notification.collapse_id, threadId: notification.thread_id, preview: true });
+    for (const [kind, hold] of [['approval', 300], ['clarify', 3600]] as const) {
+      expect(deliveryPolicy({ ...notification, kind }, device, true, 0)).toEqual({ type: 'banner', interruption: 'time-sensitive', collapseId: notification.collapse_id, threadId: notification.thread_id, preview: true, hold });
     }
     expect(deliveryPolicy({ ...notification, kind: 'approval', is_subagent: true }, device, true, 0)).toEqual({ type: 'none' });
     expect(deliveryPolicy(progress, device, true, 0)).toEqual({ type: 'activity' });
