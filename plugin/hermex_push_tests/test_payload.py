@@ -35,6 +35,12 @@ def test_preview_is_clipped_and_whitespace_normalised():
     assert len(p["body"]) == 400 and p["body"].endswith("…")
 
 
+def test_preview_seals_the_bot_name_clipped_and_only_when_known():
+    p = preview(title="t", body="b", profile="p", bot_name="  Inbox\n Triage " + "x" * 100)
+    assert len(p["bot_name"]) == 80 and p["bot_name"].startswith("Inbox Triage x") and p["bot_name"].endswith("…")
+    assert "bot_name" not in preview(title="t", body="b", profile="p", bot_name="  ")
+
+
 def test_preview_drops_emphasis_code_and_heading_markers():
     # The body is the banner reported in hermex#583.
     p = preview(title="## Summary", subtitle="__strong__ *it* _em_ ~~old~~ run `npm test`",

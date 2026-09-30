@@ -70,9 +70,14 @@ Notification (`kind` is `reply`, `approval`, `clarify` or `turn_error`):
 ```
 
 `sealed` is base64 of `nonce(12) || AES-256-GCM ciphertext || tag(16)` over the UTF-8 JSON
-`{"title","subtitle","body","profile","request_id"}`, AAD `hermex-preview-v1:<sha256 hex of
-install_key>`. Banners render no markdown, so title, subtitle and body are flattened to plain
-text and then clipped to 80, 120 and 400 characters. Approval banners are not flattened: their
+`{"title","subtitle","body","profile","request_id","bot_name"}`, AAD `hermex-preview-v1:<sha256 hex of
+install_key>`. `bot_name` is the name Hermex's bot roster shows (the Desktop title, then
+`display_name`, then the Profile, with the default Profile as "Hermes"), read from the host's
+`profile.yaml` for each banner and clipped to 80 characters. Hermex builds the banner title from it
+and `kind` in the phone's language; `title` carries the same in English (`<name> · Approval
+needed`, `· Question`, `· Turn failed`, the name alone for a reply) for older app builds.
+Banners render no markdown, so title, subtitle and body are flattened to plain text and then
+clipped to 80, 120 and 400 characters. Approval banners are not flattened: their
 body is a shell command, so it is only whitespace-collapsed and clipped.
 A `null` seal means encryption failed on the host; the phone shows a generic
 banner. `event_id` is stable per turn or request for relay dedupe; `thread_id` and

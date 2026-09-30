@@ -1,6 +1,9 @@
+import sys
+import types
+
 import pytest
 
-from hermex_push.hooks import HermexPush
+from hermex_push.hooks import HermexPush, bot_name_for
 from hermex_push.privacy import unseal
 
 
@@ -8,7 +11,7 @@ from hermex_push.privacy import unseal
 def push(keys, sender):
     clock = {"now": 1000.0}
     p = HermexPush(profile="work", sender=sender, keys_loader=lambda: keys, relay_url=lambda: "https://relay.test/",
-                   now=lambda: clock["now"], schedule=lambda delay, fn: None)
+                   now=lambda: clock["now"], schedule=lambda delay, fn: None, bot_name=lambda: "Inbox Triage")
     p.clock = clock
     return p
 
@@ -34,7 +37,8 @@ def test_one_sealed_reply_per_completed_turn(push, sender, keys):
     assert event["kind"] == "reply" and event["source"] == "bot" and event["is_subagent"] is False
     assert "Done" not in str(event)
     inner = unseal(event["sealed"], preview_key=keys.preview_key, install_key=keys.install_key)
-    assert inner == {"title": "work", "subtitle": "do it", "body": "Done.", "profile": "work", "request_id": ""}
+    assert inner == {"title": "Inbox Triage", "subtitle": "do it", "body": "Done.", "profile": "work",
+                     "request_id": "", "bot_name": "Inbox Triage"}
     # Progress: turn start and turn end were status changes, so both went through.
     assert [e["status"] for _, e in sender.events if e["kind"] == "progress"] == ["running", "done"]
 
@@ -145,7 +149,46 @@ def test_no_event_of_any_kind_carries_plaintext(push, sender):
     push.clock["now"] += 5
     push.flush_progress()
     assert len(sender.events) >= 6
-    assert marker not in json.dumps([e for _, e in sender.events])
+    relayed = json.dumps([e for _, e in sender.events])
+    assert marker not in relayed and "Inbox Triage" not in relayed
+
+
+def test_every_banner_names_the_bot(push, sender, keys):
+    push.pre_llm_call(session_id="s", platform="desktop")
+    push.pre_approval_request(command="ls", description="", session_id="s", surface="cli", request_id="r")
+    push.pre_tool_call(tool_name="clarify", args={"question": "Which?"}, session_id="s", tool_call_id="c")
+    push.on_session_end(session_id="s", completed=False, interrupted=False, failed=True, turn_id="t1",
+                        platform="desktop")
+    run_turn(push, session_id="s")
+    sealed = {e["kind"]: unseal(e["sealed"], preview_key=keys.preview_key, install_key=keys.install_key)
+              for e in notifications(sender)}
+    assert {kind: (inner["title"], inner["bot_name"]) for kind, inner in sealed.items()} == {
+        "approval": ("Inbox Triage · Approval needed", "Inbox Triage"),
+        "clarify": ("Inbox Triage · Question", "Inbox Triage"),
+        "turn_error": ("Inbox Triage · Turn failed", "Inbox Triage"),
+        "reply": ("Inbox Triage", "Inbox Triage"),
+    }
+
+
+def test_bot_name_follows_the_roster_chain(monkeypatch, tmp_path):
+    """Desktop title, then display_name, then the slug, and "Hermes" for the default Profile."""
+    metas = {
+        "inbox": {"bot_title": "Inbox Triage", "display_name": "Inbox"},
+        "ops": {"bot_title": "", "display_name": "Ops Desk"},
+        "bare": {"bot_title": "", "display_name": ""},
+        "default": {"bot_title": "", "display_name": ""},
+    }
+    profiles = types.ModuleType("hermes_cli.profiles")
+    profiles.get_profile_dir = lambda name: tmp_path / name
+    profiles.read_profile_meta = lambda profile_dir: metas[profile_dir.name]
+    monkeypatch.setitem(sys.modules, "hermes_cli", types.ModuleType("hermes_cli"))
+    monkeypatch.setitem(sys.modules, "hermes_cli.profiles", profiles)
+    assert [bot_name_for(p) for p in ("inbox", "ops", "bare", "")] == ["Inbox Triage", "Ops Desk", "bare", "Hermes"]
+    metas["default"] = {"bot_title": "", "display_name": "Main"}
+    assert bot_name_for("") == "Main"
+    # A host without the helpers, or one whose read fails, falls back to the slug.
+    profiles.read_profile_meta = lambda profile_dir: 1 / 0
+    assert [bot_name_for(p) for p in ("inbox", "")] == ["inbox", "Hermes"]
 
 
 def test_default_profile_titles_as_hermes(keys, sender):
@@ -153,7 +196,7 @@ def test_default_profile_titles_as_hermes(keys, sender):
                    schedule=lambda d, f: None)
     run_turn(p)
     inner = unseal(notifications(sender)[0]["sealed"], preview_key=keys.preview_key, install_key=keys.install_key)
-    assert inner["title"] == "Hermes" and inner["profile"] == ""
+    assert inner["title"] == "Hermes" and inner["bot_name"] == "Hermes" and inner["profile"] == ""
 
 
 def test_scheduler_failure_does_not_wedge_flushing(keys, sender):
