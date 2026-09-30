@@ -3,7 +3,7 @@ import { reset, runInDurableObject, runDurableObjectAlarm, evictDurableObject } 
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Env as RelayEnv } from '../src/coordinator';
 import { ApnsSender } from '../src/apns';
-import { sha256 } from '../src/contract';
+import { canonicalJson, sha256 } from '../src/contract';
 import { device, installKey, notification, progress } from './fixtures';
 
 declare global { namespace Cloudflare { interface Env extends RelayEnv {} interface GlobalProps { mainModule: typeof import('../src/index'); durableNamespaces: 'InstallCoordinator' } } }
@@ -50,6 +50,67 @@ it('registers under only the install hash, updates preferences, and revokes imme
   expect((await request(`devices/${device.device_token}`, 'DELETE')).status).toBe(200);
   expect((await request(`devices/${device.device_token}`, 'DELETE')).status).toBe(200);
   expect((await bindings.hermex_relay.list()).keys).toHaveLength(0);
+});
+
+const kvKeys = async () => (await bindings.hermex_relay.list()).keys.map(key => key.name);
+const digestRows = async () => runInDurableObject(await coordinator(), async (_instance, state) => [...(await state.storage.list({ prefix: 'digest:' })).keys()]);
+
+it('writes nothing to KV when an unchanged registration arrives again, and still delivers', async () => {
+  await register();
+  const revision = await kvKeys();
+  const put = vi.spyOn(bindings.hermex_relay, 'put');
+  const remove = vi.spyOn(bindings.hermex_relay, 'delete');
+  // The same record; the order of keys in the body does not matter.
+  const { prefs, ...rest } = device;
+  expect((await request('devices', 'POST', { prefs, ...Object.fromEntries(Object.entries(rest).reverse()) })).status).toBe(200);
+  expect(put).not.toHaveBeenCalled();
+  expect(remove).not.toHaveBeenCalled();
+  expect(await kvKeys()).toEqual(revision);
+  expect((await request('notify', 'POST', notification)).status).toBe(200);
+  expect(vi.mocked(ApnsSender.prototype.send).mock.calls.map(([push]) => push.token)).toEqual([device.device_token]);
+});
+
+it('digests records with their keys sorted at every level', () => {
+  expect(canonicalJson({ b: 1, a: { d: [{ f: 1, e: 2 }], c: null } })).toBe('{"a":{"c":null,"d":[{"e":2,"f":1}]},"b":1}');
+});
+
+it('writes a new revision for a changed preference or environment, and again after revocation', async () => {
+  await register();
+  for (const changed of [{ ...device, prefs: { ...device.prefs, previews: false } }, { ...device, environment: 'production' }]) {
+    const before = await kvKeys();
+    expect((await request('devices', 'POST', changed)).status).toBe(200);
+    const after = await kvKeys();
+    expect(after).toHaveLength(1);
+    expect(after).not.toEqual(before);
+  }
+  // An explicit DELETE and an APNs invalid-token revocation both clear the digest, so the same record writes again.
+  expect((await request(`devices/${device.device_token}`, 'DELETE')).status).toBe(200);
+  expect(await digestRows()).toEqual([]);
+  await register();
+  expect(await kvKeys()).toHaveLength(1);
+  vi.mocked(ApnsSender.prototype.send).mockResolvedValueOnce('invalid-token');
+  await request('notify', 'POST', notification);
+  expect(await kvKeys()).toEqual([]);
+  expect(await digestRows()).toEqual([]);
+  await register();
+  expect(await kvKeys()).toHaveLength(1);
+  expect((await request('notify', 'POST', { ...notification, event_id: '1'.repeat(32) })).status).toBe(200);
+  expect(ApnsSender.prototype.send).toHaveBeenCalledTimes(2);
+});
+
+it('writes again when an earlier relay version moved the pointer and left the digest behind', async () => {
+  await register();
+  const [first = ''] = await kvKeys();
+  // A rolled-back relay registers replies off: a new revision and pointer, with the old digest untouched.
+  const stale = `installs:${await sha256(installKey)}:devices:${device.device_token}:rollback`;
+  await bindings.hermex_relay.put(stale, JSON.stringify({ ...device, prefs: { ...device.prefs, replies: false } }));
+  await runInDurableObject(await coordinator(), async (_instance, state) => { await state.storage.put('devices', { [device.device_token]: stale }); });
+  await bindings.hermex_relay.delete(first);
+  // Redeployed, the app turns replies back on: the original record, which matches the stale digest.
+  await register();
+  expect(await kvKeys()).not.toEqual([stale]);
+  expect((await request('notify', 'POST', notification)).status).toBe(200);
+  expect(vi.mocked(ApnsSender.prototype.send).mock.calls.map(([push]) => push.token)).toEqual([device.device_token]);
 });
 
 it('deduplicates concurrent requests and retains receipts across object eviction', async () => {

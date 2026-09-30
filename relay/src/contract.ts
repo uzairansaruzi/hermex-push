@@ -51,6 +51,13 @@ export type Command =
   | { action: 'delete-activity'; token: string; session: string }
   | { action: 'notify'; event: PushEvent };
 
+/** JSON with object keys sorted at every level, so equal records hash equally whatever order zod emits. */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, field: unknown) => field && typeof field === 'object' && !Array.isArray(field)
+    ? Object.fromEntries(Object.entries(field).sort(([a], [b]) => (a < b ? -1 : 1)))
+    : field);
+}
+
 export async function sha256(value: string): Promise<string> {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('');
