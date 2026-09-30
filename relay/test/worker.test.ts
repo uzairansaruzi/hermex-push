@@ -98,6 +98,21 @@ it('writes a new revision for a changed preference or environment, and again aft
   expect(ApnsSender.prototype.send).toHaveBeenCalledTimes(2);
 });
 
+it('writes again when an earlier relay version moved the pointer and left the digest behind', async () => {
+  await register();
+  const [first = ''] = await kvKeys();
+  // A rolled-back relay registers replies off: a new revision and pointer, with the old digest untouched.
+  const stale = `installs:${await sha256(installKey)}:devices:${device.device_token}:rollback`;
+  await bindings.hermex_relay.put(stale, JSON.stringify({ ...device, prefs: { ...device.prefs, replies: false } }));
+  await runInDurableObject(await coordinator(), async (_instance, state) => { await state.storage.put('devices', { [device.device_token]: stale }); });
+  await bindings.hermex_relay.delete(first);
+  // Redeployed, the app turns replies back on: the original record, which matches the stale digest.
+  await register();
+  expect(await kvKeys()).not.toEqual([stale]);
+  expect((await request('notify', 'POST', notification)).status).toBe(200);
+  expect(vi.mocked(ApnsSender.prototype.send).mock.calls.map(([push]) => push.token)).toEqual([device.device_token]);
+});
+
 it('deduplicates concurrent requests and retains receipts across object eviction', async () => {
   await register();
   const responses = await Promise.all(Array.from({ length: 5 }, () => request('notify', 'POST', notification)));

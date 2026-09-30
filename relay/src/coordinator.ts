@@ -32,7 +32,8 @@ const dueKey = (at: number, key = '') => `due:${String(at).padStart(15, '0')}:${
 const sweepAt = (expires: number) => Math.ceil(expires / 60_000) * 60_000;
 // Marks the legacy pass done. Event ids are hex, so this key never collides with a receipt.
 const indexedKey = 'event:~indexed';
-// SHA-256 of the canonical record the device's KV revision holds; written with its registry pointer.
+// `<sha256 of the canonical record>:<its KV revision>`, written with the registry pointer. Naming the
+// revision means a pointer moved by any other code (an older deploy) no longer matches.
 const digestKey = (token: string) => `digest:${token}`;
 
 /** One serial owner per install. KV values are immutable; durable pointers make deletes immediate. */
@@ -124,13 +125,13 @@ export class InstallCoordinator extends DurableObject<Env> {
         if (!previous && Object.keys(registry).length >= 32) return { status: 409, result: 'device_limit' };
         const digest = await sha256(canonicalJson(command.device));
         // The app re-registers on every launch; an identical record skips the paid KV put and delete.
-        if (previous && await this.ctx.storage.get<string>(digestKey(token)) === digest) return ok();
+        if (previous && await this.ctx.storage.get<string>(digestKey(token)) === `${digest}:${previous}`) return ok();
         const key = `installs:${installHash}:devices:${token}:${crypto.randomUUID()}`;
         // Unique revisions avoid KV's one-write-per-key-per-second restriction.
         await this.env.hermex_relay.put(key, JSON.stringify(command.device));
         registry[token] = key;
         // One call keeps the pointer and the digest of the record it points to atomic.
-        await this.ctx.storage.put({ devices: registry, [digestKey(token)]: digest });
+        await this.ctx.storage.put({ devices: registry, [digestKey(token)]: `${digest}:${key}` });
         if (previous) await this.env.hermex_relay.delete(previous);
         return ok();
       }
