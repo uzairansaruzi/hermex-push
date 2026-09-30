@@ -37,6 +37,10 @@ HOOK_NAMES = (
 )
 MAX_TRACKED_SESSIONS = 4096
 RELAY_URL_CACHE_SECONDS = 5.0
+# The English label after the bot's name in each sealed title; a reply is titled by the name
+# alone. Hermex builds the same title in the phone's language from ``kind`` and ``bot_name``, so
+# this English copy only shows on app builds that predate ``bot_name``.
+TITLE_LABELS = {"approval": "Approval needed", "clarify": "Question", "turn_error": "Turn failed"}
 
 
 def _root_dotenv_value(key: str) -> str:
@@ -69,6 +73,22 @@ def relay_url_from_env() -> str:
         logger.warning("hermex-push: refusing %s=%r (https required, http only to loopback)", RELAY_URL_ENV, value)
         return ""
     return value
+
+
+def bot_name_for(profile: str) -> str:
+    """The name Hermex's bot roster shows for a Profile: its Desktop title, then its
+    ``display_name``, then the slug, with the default Profile as "Hermes". Read from the host's
+    ``profile.yaml`` on every banner (hermes-agent caches the read by file signature), so a rename
+    shows on the next one. ``hermes_cli.profiles`` is a hermes-agent internal: a host without it,
+    or a read that fails, gets the slug."""
+    fallback = profile if profile and profile != "default" else "Hermes"
+    try:
+        from hermes_cli.profiles import get_profile_dir, read_profile_meta
+        meta = read_profile_meta(get_profile_dir(profile or "default"))
+        names = (str(meta.get(key) or "").strip() for key in ("bot_title", "display_name"))
+        return next((name for name in names if name), fallback)
+    except Exception:
+        return fallback
 
 
 class _Recent(OrderedDict):
@@ -105,8 +125,10 @@ class HermexPush:
         keys_loader: Callable[[], Keys] = load_or_create_keys,
         relay_url: Callable[[], str] = relay_url_from_env, now: Callable[[], float] = time.time,
         schedule: Optional[Callable[[float, Callable[[], None]], Any]] = None,
+        bot_name: Optional[Callable[[], str]] = None,
     ) -> None:
         self._profile = "" if profile == "default" else profile
+        self._bot_name = bot_name or (lambda: bot_name_for(self._profile))
         self._sender = sender or RelaySender()
         self._keys_loader = keys_loader
         self._relay_url = relay_url
@@ -174,16 +196,22 @@ class HermexPush:
         platform = self._platform_by_session.get(session_id, "")
         return platform, coarse_source(platform), session_id in self._subagent_sessions
 
-    def _notify(self, kind: str, session_id: str, event_ref: str, content: Optional[dict[str, str]]) -> None:
+    def _notify(self, kind: str, session_id: str, event_ref: str, **content: Any) -> None:
+        """Seal one banner. ``content`` is the ``preview`` fields besides the title, which is
+        the bot's name and the kind's label; the name is only read when a banner goes out."""
         platform, source, is_subagent = self._session(session_id)
         if not should_notify(session_id, platform):
             return
         keys = self._keys_or_none()
         if keys is None:
             return
+        name = self._bot_name() or self._profile or "Hermes"
+        label = TITLE_LABELS.get(kind)
+        sealed = preview(title=f"{name} · {label}" if label else name, bot_name=name,
+                         profile=self._profile, **content)
         self._send(notify_event(
             kind=kind, session_id=session_id, event_ref=event_ref, source=source, is_subagent=is_subagent,
-            keys=keys, preview=content, now=self._now(),
+            keys=keys, preview=sealed, now=self._now(),
         ))
 
     # -- progress -------------------------------------------------------------------------
@@ -294,13 +322,11 @@ class HermexPush:
                 return
             ref = turn_id or str(int(self._now()))
             if failed:
-                self._notify("turn_error", session_id, ref, preview(
-                    title="Turn failed", body=turn_exit_reason or "The agent stopped without finishing.",
-                    profile=self._profile))
+                self._notify("turn_error", session_id, ref,
+                             body=turn_exit_reason or "The agent stopped without finishing.")
             elif completed and captured is not None:
                 user_message, reply = captured
-                self._notify("reply", session_id, ref, preview(
-                    title=self._profile or "Hermes", subtitle=user_message, body=reply, profile=self._profile))
+                self._notify("reply", session_id, ref, subtitle=user_message, body=reply)
         except Exception:
             logger.warning("hermex-push: on_session_end failed; a push was dropped", exc_info=True)
 
@@ -312,8 +338,8 @@ class HermexPush:
                 with self._lock:
                     snapshot = self._progress.waiting(session_id, now)
                 self._emit_progress(snapshot)
-                self._notify("clarify", session_id, tool_call_id or f"{tool_name}:{int(now)}", preview(
-                    title="Question", body=clarify_question(args), profile=self._profile, request_id=tool_call_id))
+                self._notify("clarify", session_id, tool_call_id or f"{tool_name}:{int(now)}",
+                             body=clarify_question(args), request_id=tool_call_id)
                 return
             with self._lock:
                 snapshot = self._progress.tool_started(session_id, tool_name, now)
@@ -355,9 +381,8 @@ class HermexPush:
             ref = request_id or tool_call_id or f"approval:{int(self._now())}"
             # The command is shell, not markdown: flattening would turn `*.md` or `__pycache__`
             # into a different command than the one awaiting approval.
-            self._notify("approval", sid, ref, preview(
-                title="Approval needed", subtitle=description, body=command, profile=self._profile,
-                request_id=request_id, markdown=False))
+            self._notify("approval", sid, ref, subtitle=description, body=command, request_id=request_id,
+                         markdown=False)
         except Exception:
             logger.warning("hermex-push: pre_approval_request failed", exc_info=True)
 

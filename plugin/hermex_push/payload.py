@@ -7,8 +7,11 @@ Notification event (``POST /installs/{install_key}/notify``)::
      "session_id": str, "source": "bot" | "webui" | "other", "is_subagent": bool,
      "sent_at": <unix seconds>, "sealed": <base64> | null}
 
-``sealed`` decrypts to ``{"title", "subtitle", "body", "profile", "request_id"}``. A null
-``sealed`` means the host could not encrypt; the phone shows a generic "New activity" banner.
+``sealed`` decrypts to ``{"title", "subtitle", "body", "profile", "request_id", "bot_name"}``.
+``bot_name`` is the name the Hermex roster shows for the bot, omitted when unknown; the phone
+builds a title in its own language from it and ``kind``, and older builds show the English
+``title``. A null ``sealed`` means the host could not encrypt; the phone shows a generic
+"New activity" banner.
 
 Progress event (Live Activity state, same route)::
 
@@ -112,16 +115,22 @@ def _clip(text: Any, limit: int, *, markdown: bool) -> str:
 
 
 def preview(*, title: Any, body: Any, profile: str, subtitle: Any = "", request_id: str = "",
-            markdown: bool = True) -> dict[str, str]:
-    """The sealed banner content. iOS banners render plain text, so markdown is flattened before
-    sealing; ``markdown=False`` leaves text that is not markdown, like a shell command, unflattened."""
-    return {
-        "title": _clip(title, TITLE_CHARS, markdown=markdown),
+            bot_name: Any = "", markdown: bool = True) -> dict[str, str]:
+    """The sealed banner content. iOS banners render plain text, so the subtitle and body are
+    flattened from markdown before sealing; ``markdown=False`` leaves text that is not markdown,
+    like a shell command, unflattened. The title (the bot's name and a fixed label) and the bot's
+    name are never markdown, and an empty name is left out."""
+    content = {
+        "title": _clip(title, TITLE_CHARS, markdown=False),
         "subtitle": _clip(subtitle, SUBTITLE_CHARS, markdown=markdown),
         "body": _clip(body, BODY_CHARS, markdown=markdown),
         "profile": profile,
         "request_id": request_id,
     }
+    name = _clip(bot_name, TITLE_CHARS, markdown=False)
+    if name:
+        content["bot_name"] = name
+    return content
 
 
 def _identity(keys: Keys, kind: str, session_id: str, event_ref: str) -> dict[str, str]:
