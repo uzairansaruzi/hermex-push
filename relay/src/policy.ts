@@ -1,9 +1,14 @@
-import type { Device, PushEvent, ProgressEvent } from './contract';
+import type { Device, NotificationEvent, PushEvent, ProgressEvent } from './contract';
 
+/** `hold` is how many seconds APNs may store the banner while the phone is offline. */
 export type Delivery =
   | { type: 'none' }
   | { type: 'activity' }
-  | { type: 'banner'; interruption: 'active' | 'time-sensitive'; collapseId: string; threadId: string; preview: boolean };
+  | { type: 'banner'; interruption: 'active' | 'time-sensitive'; collapseId: string; threadId: string; preview: boolean; hold: number };
+
+// An approval is moot after the host's five-minute approval timeout, a question after its one-hour
+// clarify timeout; a reply or failure is still news an hour later.
+const holds: Record<NotificationEvent['kind'], number> = { approval: 300, clarify: 3600, reply: 3600, turn_error: 3600 };
 
 /**
  * All per-device delivery etiquette lives here; no storage, clocks, or network calls.
@@ -20,7 +25,7 @@ export function deliveryPolicy(event: PushEvent, device: Device, hasActivity: bo
   ))) return { type: 'none' };
   return {
     type: 'banner', interruption: event.kind === 'reply' ? 'active' : 'time-sensitive',
-    collapseId: event.collapse_id, threadId: event.thread_id, preview: prefs.previews,
+    collapseId: event.collapse_id, threadId: event.thread_id, preview: prefs.previews, hold: holds[event.kind],
   };
 }
 

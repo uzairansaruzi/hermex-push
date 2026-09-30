@@ -31,11 +31,19 @@ it('signs a verifiable ES256 JWT and renews it after 50 minutes', async () => {
 it('builds generic banners containing ciphertext and routing metadata only', async () => {
   const policy = deliveryPolicy(notification, device, false, 0);
   if (policy.type !== 'banner') throw new Error('Expected banner');
-  const push = bannerPush(notification, device, await sha256(installKey), policy);
+  const push = bannerPush(notification, device, await sha256(installKey), policy, 0);
   expect(push.payload).toMatchObject({ sealed: notification.sealed, session_id: notification.session_id, aps: { alert: { title: 'Hermex', body: 'New activity' }, 'mutable-content': 1 } });
   expect(JSON.stringify(push)).not.toContain(installKey);
-  expect(bannerPush(notification, device, 'hash', { ...policy, preview: false }).payload).toMatchObject({ sealed: null });
-  expect(bannerPush({ ...notification, sealed: 'a'.repeat(8000) }, device, 'hash', policy).payload).toMatchObject({ sealed: null });
+  expect(bannerPush(notification, device, 'hash', { ...policy, preview: false }, 0).payload).toMatchObject({ sealed: null });
+  expect(bannerPush({ ...notification, sealed: 'a'.repeat(8000) }, device, 'hash', policy, 0).payload).toMatchObject({ sealed: null });
+});
+
+// APNs stores a push with a future expiration and delivers it when an offline phone reconnects.
+it.each([['approval', 300], ['clarify', 3600], ['reply', 3600], ['turn_error', 3600]] as const)('lets APNs hold a %s banner for %i seconds', (kind, hold) => {
+  const event = { ...notification, kind };
+  const policy = deliveryPolicy(event, device, false, 0);
+  if (policy.type !== 'banner') throw new Error('Expected banner');
+  expect(bannerPush(event, device, 'hash', policy, 5000).expiration).toBe(5000 + hold);
 });
 
 it('uses versioned activity state, stale dates, end events, and the activity topic', () => {
@@ -50,7 +58,10 @@ it.each(['sandbox', 'production'] as const)('sends to %s with APNs headers and n
   const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => { new Request(input, init); return new Response(null, { status: 200 }); });
   const push = activityPush(progress, { ...device, environment, bundle_id: 'com.uzairansar.hermesmobile.branch' }, 'token', '5', 5000);
   expect(await sender.send(push)).toBe('sent');
-  expect(fetch).toHaveBeenCalledWith(`https://${environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com'}/3/device/token`, expect.objectContaining({ redirect: 'manual', headers: expect.objectContaining({ 'apns-topic': 'com.uzairansar.hermesmobile.branch.push-type.liveactivity', 'apns-priority': '5', 'apns-push-type': 'liveactivity', authorization: expect.stringMatching(/^bearer /) }) }));
+  expect(fetch).toHaveBeenCalledWith(`https://${environment === 'sandbox' ? 'api.sandbox.push.apple.com' : 'api.push.apple.com'}/3/device/token`, expect.objectContaining({ redirect: 'manual', headers: expect.objectContaining({ 'apns-topic': 'com.uzairansar.hermesmobile.branch.push-type.liveactivity', 'apns-priority': '5', 'apns-push-type': 'liveactivity', 'apns-expiration': '0', authorization: expect.stringMatching(/^bearer /) }) }));
+  // A routine update is never stored; an end is held as long as the activity's stale date.
+  expect(await sender.send(activityPush({ ...progress, status: 'done' }, device, 'token', '10', 5000))).toBe('sent');
+  expect(fetch).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ headers: expect.objectContaining({ 'apns-expiration': '5900' }) }));
 });
 
 it.each([

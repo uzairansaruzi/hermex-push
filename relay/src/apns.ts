@@ -2,7 +2,8 @@ import type { Device, NotificationEvent, ProgressEvent } from './contract';
 import type { Delivery } from './policy';
 
 export interface ApnsSecrets { APNS_KEY_ID: string; APNS_TEAM_ID: string; APNS_PRIVATE_KEY: string }
-export interface Push { token: string; topic: string; environment: Device['environment']; type: 'alert' | 'liveactivity'; priority: '5' | '10'; collapseId?: string; payload: object }
+/** `expiration` is the UNIX second until which APNs stores the push for an offline phone; 0 tries once and never stores. */
+export interface Push { token: string; topic: string; environment: Device['environment']; type: 'alert' | 'liveactivity'; priority: '5' | '10'; expiration: number; collapseId?: string; payload: object }
 export type SendResult = 'sent' | 'invalid-token' | 'retry' | 'rejected';
 const encoder = new TextEncoder();
 
@@ -44,7 +45,7 @@ export class ApnsSender {
         headers: {
           authorization: `bearer ${await this.authorization()}`, 'content-type': 'application/json',
           'apns-topic': push.topic, 'apns-push-type': push.type, 'apns-priority': push.priority,
-          'apns-expiration': '0', ...(push.collapseId ? { 'apns-collapse-id': push.collapseId } : {}),
+          'apns-expiration': String(push.expiration), ...(push.collapseId ? { 'apns-collapse-id': push.collapseId } : {}),
         },
         body: JSON.stringify(push.payload),
       });
@@ -73,7 +74,8 @@ export function senderFor(secrets: ApnsSecrets): ApnsSender {
   return shared.sender;
 }
 
-export function bannerPush(event: NotificationEvent, device: Device, installHash: string, policy: Extract<Delivery, { type: 'banner' }>): Push {
+/** `now` is UNIX seconds; APNs holds the banner for `policy.hold` seconds after it. */
+export function bannerPush(event: NotificationEvent, device: Device, installHash: string, policy: Extract<Delivery, { type: 'banner' }>, now: number): Push {
   const payload = {
     aps: {
       alert: { title: 'Hermex', body: 'New activity' }, sound: 'default',
@@ -85,15 +87,17 @@ export function bannerPush(event: NotificationEvent, device: Device, installHash
   };
   // Unicode previews can exceed APNs' 4 KiB limit even with the plugin's character cap.
   if (encoder.encode(JSON.stringify(payload)).length > 4096) payload.sealed = null;
-  return { token: device.device_token, topic: device.bundle_id, environment: device.environment, type: 'alert', priority: '10', collapseId: policy.collapseId, payload };
+  return { token: device.device_token, topic: device.bundle_id, environment: device.environment, type: 'alert', priority: '10', expiration: now + policy.hold, collapseId: policy.collapseId, payload };
 }
 
 export function activityPush(event: ProgressEvent, device: Device, token: string, priority: '5' | '10', now: number): Push {
+  const end = event.status === 'done' || event.status === 'failed';
   return {
     token, topic: `${device.bundle_id}.push-type.liveactivity`, environment: device.environment,
-    type: 'liveactivity', priority,
+    // A late update is superseded anyway, but a phone offline at the end still needs it until the stale date.
+    type: 'liveactivity', priority, expiration: end ? now + 900 : 0,
     payload: { aps: {
-      timestamp: now, event: event.status === 'done' || event.status === 'failed' ? 'end' : 'update',
+      timestamp: now, event: end ? 'end' : 'update',
       'stale-date': now + 900,
       // updated_at lets the widget say how fresh the state is; the phone cannot see `timestamp`.
       'content-state': {

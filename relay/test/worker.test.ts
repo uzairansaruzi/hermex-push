@@ -137,6 +137,13 @@ it('banners an approval during an activity while its waiting update stays silent
   expect(pushes[1]).toMatchObject({ payload: { aps: { 'interruption-level': 'time-sensitive' }, kind: 'approval' } });
 });
 
+it('dates a banner hold from the relay clock in seconds, not the host sent_at', async () => {
+  await register();
+  vi.spyOn(Date, 'now').mockReturnValue(1_900_000_000_500);
+  expect((await request('notify', 'POST', { ...notification, kind: 'approval' })).status).toBe(200);
+  expect(ApnsSender.prototype.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'alert', expiration: 1_900_000_300 }));
+});
+
 it('activity deletion cancels pending updates and restores banners', async () => {
   await registerActivity();
   await request(`devices/${device.device_token}/activities/${encodeURIComponent(progress.session_id)}`, 'DELETE');

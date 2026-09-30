@@ -186,7 +186,7 @@ export class InstallCoordinator extends DurableObject<Env> {
     else await this.putDue({ [key]: receipt, receipts: stored ? receipts : receipts + 1 }, key, sweepAt(receipt.expires));
     // Concurrent fan-out keeps one slow phone from exhausting the plugin's 10-second timeout.
     const deliveries = await Promise.allSettled(targets.map(({ device, policy }) =>
-      policy.type === 'banner' ? this.sender.send(bannerPush(event, device, installHash, policy)) : 'sent'));
+      policy.type === 'banner' ? this.sender.send(bannerPush(event, device, installHash, policy, Math.floor(now / 1000))) : 'sent'));
     for (const [index, delivery] of deliveries.entries()) {
       const target = targets[index];
       if (!target) continue;
