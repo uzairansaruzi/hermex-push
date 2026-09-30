@@ -26,14 +26,18 @@ def keys():
 
 
 class CapturingSender(RelaySender):
-    """Records events instead of posting; delivery is synchronous."""
+    """Records events instead of posting; delivery is synchronous and every event gets the
+    relay answer ``result`` (a test sets ``no_activity`` for a session no phone watches)."""
 
     def __init__(self):
-        super().__init__(post=lambda url, body: 200)
+        super().__init__(post=lambda url, body: (200, "accepted"))
         self.events = []
+        self.result = "accepted"
 
-    def enqueue(self, url, event):
+    def enqueue(self, url, event, on_result=None):
         self.events.append((url, event))
+        if on_result is not None:
+            on_result(self.result)
         return True
 
 

@@ -310,10 +310,19 @@ it('reads only the registry and activity key for progress without an activity, a
   const activityKey = `activity:${device.device_token}:${await sha256(progress.session_id)}`;
   await runInDurableObject(stub, async (instance, state) => {
     const spies = (['get', 'list', 'put', 'delete', 'getAlarm', 'setAlarm'] as const).map(method => vi.spyOn(state.storage, method));
-    expect(await instance.handle(hash, { action: 'notify', event: progress })).toEqual({ status: 200, result: 'accepted' });
+    expect(await instance.handle(hash, { action: 'notify', event: progress })).toEqual({ status: 200, result: 'no_activity' });
     expect(spies[0]?.mock.calls.map(([key]) => key)).toEqual(['devices', activityKey]);
     for (const spy of spies.slice(1)) expect(spy).not.toHaveBeenCalled();
   });
+});
+
+it('tells the plugin whether any phone shows an activity for the progress session', async () => {
+  await registerActivity();
+  expect(await (await request('notify', 'POST', progress)).json()).toEqual({ result: 'accepted' });
+  await request('notify', 'POST', { ...progress, event_id: '1'.repeat(32), status: 'done' });
+  // The ended activity is only a marker: the next turn has none until the phone registers a new one.
+  const nextTurn = { ...progress, event_id: '2'.repeat(32), started_at: progress.started_at + 20, sent_at: progress.sent_at + 20 };
+  expect(await (await request('notify', 'POST', nextTurn)).json()).toEqual({ result: 'no_activity' });
 });
 
 it('sends a replayed progress event once and stores no receipt for it', async () => {

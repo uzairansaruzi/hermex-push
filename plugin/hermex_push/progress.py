@@ -3,8 +3,13 @@
 A status change (``running`` / ``waiting`` / ``done`` / ``failed``) always produces an event
 right away. Routine tool boundaries inside the same status are held so a session emits at most
 one routine progress event every :data:`HOLD_SECONDS`; the caller flushes held events with
-:meth:`due` when :meth:`flush_delay` says a hold has ended. Pure: time comes from the caller,
-so tests drive it with a fake clock.
+:meth:`due` when :meth:`flush_delay` says a hold has ended.
+
+The relay answers ``no_activity`` when no phone shows a Live Activity for the session; the
+caller reports that with :meth:`unwatched`, which (after :data:`GRACE_SECONDS` of the turn)
+holds routine updates for :data:`QUIET_SECONDS`. The held update that goes out when the window
+ends probes again, and any other answer calls :meth:`watched` to restore the normal cadence.
+Pure: time comes from the caller, so tests drive it with a fake clock.
 """
 
 from __future__ import annotations
@@ -13,6 +18,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 HOLD_SECONDS = 5.0  # progress is most relay traffic; status changes skip the hold
+# The phone registers its activity around the turn's first event, so early answers can lag it.
+GRACE_SECONDS = 30.0
+QUIET_SECONDS = 60.0  # an unwatched session's routine updates, once the grace has passed
 MAX_SESSIONS = 512
 STALE_SECONDS = 15 * 60  # a session silent this long is forgotten; matches the activity stale date
 
@@ -25,6 +33,7 @@ class SessionProgress:
     started_at: float = 0.0
     last_emit: float = float("-inf")
     pending: bool = False
+    quiet_until: float = float("-inf")  # routine updates hold until then; no phone is watching
 
 
 @dataclass
@@ -39,6 +48,10 @@ class ProgressSnapshot:
 @dataclass
 class ProgressCoalescer:
     _sessions: dict[str, SessionProgress] = field(default_factory=dict)
+
+    @staticmethod
+    def _holding(state: SessionProgress, now: float) -> bool:
+        return now - state.last_emit < HOLD_SECONDS or now < state.quiet_until
 
     def _snapshot(self, session_id: str, state: SessionProgress, now: float) -> ProgressSnapshot:
         state.last_emit = now
@@ -59,7 +72,7 @@ class ProgressCoalescer:
         state.tool = tool
         if count_call:
             state.tool_calls += 1
-        if status_changed or now - state.last_emit >= HOLD_SECONDS:
+        if status_changed or not self._holding(state, now):
             return self._snapshot(session_id, state, now)
         state.pending = True
         return None
@@ -100,16 +113,31 @@ class ProgressCoalescer:
         self._sessions.pop(session_id, None)
         return snapshot
 
+    def unwatched(self, session_id: str, now: float) -> None:
+        """The relay found no Live Activity for the session: quiet its routine updates, unless
+        the turn is still inside its grace period. A session whose turn ended is ignored."""
+        state = self._sessions.get(session_id)
+        if state is not None and now - state.started_at >= GRACE_SECONDS:
+            state.quiet_until = now + QUIET_SECONDS
+
+    def watched(self, session_id: str) -> None:
+        """A phone shows a Live Activity for the session: back to the normal cadence."""
+        state = self._sessions.get(session_id)
+        if state is not None:
+            state.quiet_until = float("-inf")
+
     def due(self, now: float) -> list[ProgressSnapshot]:
-        """Held routine updates whose hold window has passed."""
+        """Held routine updates whose hold (and quiet window) has passed."""
         self._evict(now)
         out = []
         for session_id, state in self._sessions.items():
-            if state.pending and now - state.last_emit >= HOLD_SECONDS:
+            if state.pending and not self._holding(state, now):
                 out.append(self._snapshot(session_id, state, now))
         return out
 
     def flush_delay(self, now: float) -> Optional[float]:
-        """Seconds until the earliest held update's hold ends, or None when nothing is held."""
-        holds = [HOLD_SECONDS - (now - s.last_emit) for s in self._sessions.values() if s.pending]
+        """Seconds until the earliest held update's hold (or quiet window) ends, or None when
+        nothing is held."""
+        holds = [max(HOLD_SECONDS - (now - s.last_emit), s.quiet_until - now)
+                 for s in self._sessions.values() if s.pending]
         return max(0.0, min(holds)) if holds else None

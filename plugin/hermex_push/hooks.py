@@ -24,7 +24,7 @@ from .keys import Keys, hermes_root, load_or_create_keys
 from .payload import notify_event, preview, progress_event
 from .privacy import keyed_id
 from .progress import ProgressCoalescer, ProgressSnapshot
-from .relay import RelaySender, allowed_relay_url, notify_url
+from .relay import RelaySender, ResultFn, allowed_relay_url, notify_url
 from .sources import coarse_source, should_notify
 
 logger = logging.getLogger("hermex_push")
@@ -162,13 +162,13 @@ class HermexPush:
             self._relay_url_cache = (self._now(), url)
         return url
 
-    def _send(self, event: dict[str, Any]) -> bool:
+    def _send(self, event: dict[str, Any], on_result: Optional[ResultFn] = None) -> bool:
         url = self._relay()
         keys = self._keys_or_none()
         if not url or keys is None or self._closed:
             logger.debug("hermex-push: relay not configured; dropping a %s event", event.get("kind"))
             return False
-        return self._sender.enqueue(notify_url(url, keys.install_key), event)
+        return self._sender.enqueue(notify_url(url, keys.install_key), event, on_result)
 
     def _session(self, session_id: str) -> tuple[str, str, bool]:
         platform = self._platform_by_session.get(session_id, "")
@@ -198,11 +198,23 @@ class HermexPush:
         keys = self._keys_or_none()
         if keys is None:
             return
+        session_id = snapshot.session_id
         self._send(progress_event(
-            session_id=snapshot.session_id, source=source, is_subagent=is_subagent, keys=keys,
+            session_id=session_id, source=source, is_subagent=is_subagent, keys=keys,
             status=snapshot.status, tool=snapshot.tool, tool_calls=snapshot.tool_calls,
             started_at=snapshot.started_at, now=self._now(),
-        ))
+        ), on_result=lambda result: self._progress_answered(session_id, result))
+
+    def _progress_answered(self, session_id: str, result: str) -> None:
+        """The relay's answer to a delivered progress event (drain thread). ``no_activity`` means
+        no phone shows a Live Activity for the session, so its routine updates quiet down; any
+        other answer, including an older relay's ``accepted``, keeps the normal cadence."""
+        with self._lock:
+            if result == "no_activity":
+                self._progress.unwatched(session_id, self._now())
+            else:
+                self._progress.watched(session_id)
+        self._arm_flush()
 
     def _arm_flush(self) -> None:
         """Schedule a flush for when the earliest held update's hold ends, replacing an armed
