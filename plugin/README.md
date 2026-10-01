@@ -118,11 +118,14 @@ location inside the install directory are migrated on first use. The route answe
 `202 {"ok": true}` and about a second later re-execs the dashboard process it runs in with
 `os.execv(sys.executable, sys.orig_argv)`, so an update Hermex installed is loaded without a trip
 to the host ([hermex#934](https://github.com/uzairansaruzi/hermex/issues/934)). Before the exec it
-runs the two steps the dashboard's own SIGTERM handler runs (stop running turns and their
-foreground commands, flush in-memory transcripts), so running Bot turns end as they would on a
-normal stop. The PID stays the same, so launchd, systemd and Hermes Desktop keep tracking the
-process, and the command line keeps a `-m` launch and every flag. A `hermes dashboard` started
-without `--no-open` opens its browser tab again. Like the dashboard's own POST actions, the route
+runs the session teardown the dashboard registers for its own exit (flush transcripts, stop running
+turns and their foreground commands, close every session), so running Bot turns end as they would
+on a normal stop, and each closed session releases its active-session lease: the new image keeps
+the PID, so a lease left behind would look live and refuse the reopened chat. The PID stays the
+same, so launchd, systemd and Hermes Desktop keep tracking the process, and the command line keeps
+a `-m` launch and every flag. A `hermes dashboard` started without `--no-open` opens its browser
+tab again. The route answers 409, with nothing stopped, when the interpreter the dashboard started
+from is gone (a rebuilt virtualenv). Like the dashboard's own POST actions, the route
 relies on the app-wide Host check, auth gate and CORS policy, which cover every plugin route.
 Hermex probes the public `/api/status` until the dashboard answers, then reads the pairing route
 for the new `plugin_version`.

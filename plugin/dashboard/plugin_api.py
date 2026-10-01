@@ -70,9 +70,12 @@ def restart_dashboard() -> JSONResponse:
     session cookie, and CORS limited to localhost. ``os.execv`` keeps the PID, so a supervisor
     (launchd, systemd, Hermes Desktop) keeps tracking it, and ``sys.orig_argv`` keeps a ``-m``
     launch and every flag the dashboard was started with. A second request while one is pending
-    joins it.
+    joins it. 409, with nothing stopped, when the interpreter this process started from is gone
+    (a rebuilt virtualenv), since an exec could not replace it.
     """
     global _restart_pending
+    if not (sys.orig_argv and os.access(sys.executable, os.X_OK)):
+        raise HTTPException(status_code=409, detail="This dashboard's Python is gone; restart it on the host.")
     with _restart_lock:
         if not _restart_pending:
             timer = threading.Timer(RESTART_DELAY_S, _reexec)
@@ -83,16 +86,16 @@ def restart_dashboard() -> JSONResponse:
 
 
 def _reexec() -> None:
-    """Runs the two steps the dashboard's own SIGTERM handler runs (``tui_gateway`` binds both
-    onto its server module), then replaces the process. Turns stop first, so their interrupted
-    results are in the transcripts the flush writes: an exec has no shutdown to persist them
-    after. A host without either step is still restarted. An exec that fails leaves the process
-    running and lets the next request try again."""
+    """Runs the session teardown the dashboard registers with ``atexit``, which an exec skips
+    (``tui_gateway.server._shutdown_sessions``: flush transcripts, stop running turns and their
+    foreground commands, close every session), then replaces the process. Closing releases each
+    session's active-session lease: the new image keeps this PID and start time, so a lease left
+    behind would still look live and refuse the reopened chat. A host without the teardown is
+    still restarted. An exec that fails lowers the exit fence the teardown raised, so the process
+    keeps running commands, and lets the next request try again."""
     global _restart_pending
-    server = sys.modules.get("tui_gateway.server")
-    for step in ("_stop_turns_before_exit", "_flush_sessions_before_exit"):
-        with contextlib.suppress(Exception):
-            getattr(server, step)()
+    with contextlib.suppress(Exception):
+        sys.modules["tui_gateway.server"]._shutdown_sessions()
     for stream in (sys.stdout, sys.stderr):
         with contextlib.suppress(Exception):
             stream.flush()
@@ -100,5 +103,7 @@ def _reexec() -> None:
         os.execv(sys.executable, sys.orig_argv)
     except Exception:
         _log.exception("hermex-push: could not restart the dashboard")
+        with contextlib.suppress(Exception):
+            sys.modules["tools.environments.base"]._exit_fenced = False
         with _restart_lock:
             _restart_pending = False
