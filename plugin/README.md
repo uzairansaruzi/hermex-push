@@ -112,13 +112,29 @@ behind a paired device. They live outside the plugin's install directory so `her
 update`, a forced reinstall or `remove` cannot unpair a phone; keys from the first release's
 location inside the install directory are migrated on first use. The route answers 409 while `HERMEX_PUSH_RELAY_URL` is unset.
 
+## Restart
+
+`POST /api/plugins/hermex-push/restart` (dashboard auth, plugin 0.4.0 and later) answers
+`202 {"ok": true}` and about a second later re-execs the dashboard process it runs in with
+`os.execv(sys.executable, sys.orig_argv)`, so an update Hermex installed is loaded without a trip
+to the host ([hermex#934](https://github.com/uzairansaruzi/hermex/issues/934)). Before the exec it
+runs the two steps the dashboard's own SIGTERM handler runs (stop running turns and their
+foreground commands, flush in-memory transcripts), so running Bot turns end as they would on a
+normal stop. The PID stays the same, so launchd, systemd and Hermes Desktop keep tracking the
+process, and the command line keeps a `-m` launch and every flag. A `hermes dashboard` started
+without `--no-open` opens its browser tab again. Like the dashboard's own POST actions, the route
+relies on the app-wide Host check, auth gate and CORS policy, which cover every plugin route.
+Hermex probes the public `/api/status` until the dashboard answers, then reads the pairing route
+for the new `plugin_version`.
+
 ## Layout
 
 - `__init__.py` registers the `hermex` platform and the hooks.
 - `hermex_push/keys.py` key files; `privacy.py` sealing and keyed ids; `payload.py` event shapes;
   `sources.py` coarse source and skip rules; `progress.py` coalescing; `relay.py` background POST;
   `hooks.py` hook callbacks; `adapter.py` the send-only platform adapter.
-- `dashboard/plugin_api.py` the pairing route; `dashboard/dist/index.js` a no-op the SPA requires.
+- `dashboard/plugin_api.py` the pairing and restart routes; `dashboard/dist/index.js` a no-op the SPA
+  requires.
 - `hermex_push_tests/` pytest suite; `fixtures/sealed_preview.json` is a fixed-key vector the
   phone's Notification Service Extension tests can decrypt as well.
 
@@ -134,6 +150,10 @@ Cron `deliver: hermex` and the `input`, `delivery` and `system` kinds are V1.1
 uv venv .venv && uv pip install --python .venv/bin/python pytest cryptography fastapi httpx pyyaml
 .venv/bin/python -m pytest plugin -q
 ```
+
+`test_restart_needs_the_dashboard_sign_in` runs only where hermes-agent is importable; it skips in
+the venv above. To run it against the dashboard itself, use a hermes-agent virtualenv, for example
+`uv run --no-project --python <hermes-agent venv>/bin/python --with pytest python -m pytest plugin -q`.
 
 Every merged change under `plugin/` bumps `PLUGIN_VERSION` in `hermex_push/__init__.py` (patch
 for fixes, minor for features) along with `plugin.yaml`, `pyproject.toml` and
