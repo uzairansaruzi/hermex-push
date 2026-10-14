@@ -1,4 +1,4 @@
-"""Capabilities, pairing and restart routes, mounted by the dashboard at ``/api/plugins/hermex-push/`` behind
+"""Capabilities, pairing, restart and provider-quota routes, mounted by the dashboard at ``/api/plugins/hermex-push/`` behind
 dashboard auth. Hermex calls ``GET /pairing`` once with the user's dashboard login and stores the
 result in the Keychain; no key is ever typed.
 
@@ -16,6 +16,9 @@ can still be read. A 404 on it means an older plugin or one the dashboard hasn't
 
 ``POST /restart`` (hermex#934) restarts the dashboard process this route runs in, so a plugin
 update Hermex installed is loaded without a trip to the host.
+
+``GET /provider-quota?provider=&profile=&refresh=`` (hermex#1237) answers one provider's account
+limits for a Profile in hermes-webui's ``/api/provider/quota`` envelope (``hermex_push.quota``).
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ _ROOT = str(Path(__file__).resolve().parents[1])
 if _ROOT not in sys.path:
     sys.path.append(_ROOT)
 
-from hermex_push import PLATFORM_NAME, PLUGIN_VERSION, RELAY_URL_ENV  # noqa: E402
+from hermex_push import PLATFORM_NAME, PLUGIN_VERSION, RELAY_URL_ENV, quota  # noqa: E402
 from hermex_push.hooks import relay_url_from_env  # noqa: E402
 from hermex_push.keys import load_or_create_keys  # noqa: E402
 from hermex_push.payload import PAYLOAD_VERSION  # noqa: E402
@@ -46,6 +49,7 @@ _log = logging.getLogger(__name__)
 RESTART_DELAY_S = 1.0
 _restart_lock = threading.Lock()
 _restart_pending = False
+_quota_cache = quota.QuotaCache()
 
 
 @router.get("/capabilities")
@@ -76,6 +80,16 @@ def get_pairing() -> JSONResponse:
         },
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.get("/provider-quota")
+async def get_provider_quota(provider: str = "", profile: str = "", refresh: bool = False) -> JSONResponse:
+    """``provider`` defaults to the Profile's configured one, and ``profile`` to the dashboard's own.
+    Served from a 45 s cache unless ``refresh`` is set. The envelope's ``status``, not the HTTP
+    status, says whether limits came back."""
+    body = await quota.in_profile_scope(
+        profile, lambda: quota.provider_quota(quota.AGENT, _quota_cache, profile, provider, refresh))
+    return JSONResponse(body, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/restart", status_code=202)
