@@ -115,7 +115,7 @@ location inside the install directory are migrated on first use. The route answe
 ## Capabilities
 
 `GET /api/plugins/hermex-push/capabilities` (dashboard auth, plugin 0.5.0 and later) returns
-`{"plugin_version": "<semver>", "routes": ["GET /capabilities", "GET /pairing", "POST /restart"]}`,
+`{"plugin_version": "<semver>", "routes": ["GET /capabilities", "GET /pairing", "POST /restart", ...]}`,
 built from the routes this dashboard process mounted (method, then the path below
 `/api/plugins/hermex-push`). Hermex shows a feature that needs a plugin route only where the route
 is listed, since a POST can't be probed without running it. The read has no side effects, never
@@ -124,7 +124,7 @@ answer it. A 404 means an older plugin or one the dashboard hasn't loaded since 
 
 ## Provider quota
 
-`GET /api/plugins/hermex-push/provider-quota?provider=&profile=&refresh=` (dashboard auth) answers
+`GET /api/plugins/hermex-push/provider-quota?provider=&profile=&refresh=` (dashboard auth, plugin 0.7.0 and later) answers
 one provider's account limits for a Profile in hermes-webui's `/api/provider/quota` envelope, so
 Hermex's Usage screen reads both servers the same way
 ([hermex#1237](https://github.com/uzairansaruzi/hermex/issues/1237)):
@@ -159,14 +159,36 @@ relies on the app-wide Host check, auth gate and CORS policy, which cover every 
 Hermex probes the public `/api/status` until the dashboard answers, then reads the pairing route
 for the new `plugin_version`.
 
+## Git
+
+The host's own git routes can push and switch branches but not fetch, pull or create a branch, so
+the plugin adds them (dashboard auth, plugin 0.6.0 and later;
+[hermex#1236](https://github.com/uzairansaruzi/hermex/issues/1236)). Hermex shows Fetch, Pull and
+New branch on a Hermes chat only while `/capabilities` lists all three.
+
+- `POST /api/plugins/hermex-push/git/fetch {"path", "remote"?}` runs
+  `git fetch --prune --no-recurse-submodules [remote]`.
+- `POST /api/plugins/hermex-push/git/pull {"path", "remote"?}` runs
+  `git pull --ff-only --no-recurse-submodules [remote]`: never a merge commit.
+- `POST /api/plugins/hermex-push/git/branch {"path", "name", "start"?}` runs
+  `git switch -c <name> [start]`, which creates the branch and switches to it, carrying any
+  uncommitted changes.
+
+They answer as the host's git routes do: `200 {"ok": true, "message": <git's output>}`, or
+`400 {"detail"}` when git fails. They run in the dashboard process through the host's own
+hardening: the path through `hermes_cli.web_server_files._fs_path`, git through
+`hermes_cli.web_git._git` (hardened argv, non-interactive env, no prompts), off the event loop with
+a 60 s timeout. An option-like `remote` or `start`, and a `name` the host's `_sanitize_branch`
+would rewrite, are refused with 400 before git runs.
+
 ## Layout
 
 - `__init__.py` registers the `hermex` platform and the hooks.
 - `hermex_push/keys.py` key files; `privacy.py` sealing and keyed ids; `payload.py` event shapes;
   `sources.py` coarse source and skip rules; `progress.py` coalescing; `relay.py` background POST;
   `hooks.py` hook callbacks; `adapter.py` the send-only platform adapter.
-- `dashboard/plugin_api.py` the capabilities, pairing, restart and provider-quota routes, with
-  `hermex_push/quota.py` behind the last; `dashboard/dist/index.js` a no-op the SPA
+- `dashboard/plugin_api.py` the capabilities, pairing, restart, git and provider-quota routes,
+  with `hermex_push/quota.py` behind the last; `dashboard/dist/index.js` a no-op the SPA
   requires.
 - `hermex_push_tests/` pytest suite; `fixtures/sealed_preview.json` is a fixed-key vector the
   phone's Notification Service Extension tests can decrypt as well.
@@ -184,9 +206,9 @@ uv venv .venv && uv pip install --python .venv/bin/python pytest cryptography fa
 .venv/bin/python -m pytest plugin -q
 ```
 
-`test_restart_needs_the_dashboard_sign_in` and `test_the_agent_host_knows_the_built_in_fetchers`
-run only where hermes-agent is importable; they skip in the venv above. To run them against
-hermes-agent itself, use a hermes-agent virtualenv, for example
+`test_restart_needs_the_dashboard_sign_in`, the git route tests that run git, and
+`test_the_agent_host_knows_the_built_in_fetchers` need hermes-agent importable; they skip in the
+venv above. To run them against hermes-agent itself, use a hermes-agent virtualenv, for example
 `uv run --no-project --python <hermes-agent venv>/bin/python --with pytest python -m pytest plugin -q`.
 
 Every merged change under `plugin/` bumps `PLUGIN_VERSION` in `hermex_push/__init__.py` (patch
