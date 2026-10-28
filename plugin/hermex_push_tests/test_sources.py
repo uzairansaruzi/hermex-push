@@ -17,4 +17,6 @@ def test_native_notifying_platforms_and_automation_sessions_are_skipped():
     assert not should_notify("s1", "telegram")
     assert not should_notify("cron_job_1", "desktop")
     assert not should_notify("kanban_task", "desktop")
+    assert not should_notify("local-1f7a8d60", "cron")  # Hermes 0.22 cron session ids
+    assert not should_notify("local-1f7a8d60", "kanban")
     assert not should_notify("", "desktop")

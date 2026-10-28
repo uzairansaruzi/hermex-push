@@ -23,6 +23,9 @@ NATIVE_NOTIFY_PLATFORMS = frozenset({
 })
 
 SKIPPED_SESSION_PREFIXES = ("cron_", "kanban_")
+# Hermes 0.22 names cron sessions "local-<hash>" and sets their platform to "cron", so the
+# prefix check alone no longer catches them.
+SKIPPED_PLATFORMS = frozenset({"cron", "kanban"})
 
 
 def coarse_source(platform: str | None) -> str:
@@ -41,4 +44,6 @@ def should_notify(session_id: str | None, platform: str | None) -> bool:
     if not session_id or session_id.startswith(SKIPPED_SESSION_PREFIXES):
         return False
     name = (platform or "").strip().lower()
+    if name in SKIPPED_PLATFORMS:
+        return False
     return bool(name) and name not in NATIVE_NOTIFY_PLATFORMS
