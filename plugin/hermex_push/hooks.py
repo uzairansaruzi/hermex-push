@@ -200,7 +200,7 @@ class HermexPush:
         """Seal one banner. ``content`` is the ``preview`` fields besides the title, which is
         the bot's name and the kind's label; the name is only read when a banner goes out."""
         platform, source, is_subagent = self._session(session_id)
-        if not should_notify(session_id, platform):
+        if not should_notify(session_id, platform, kind):
             return
         keys = self._keys_or_none()
         if keys is None:

@@ -71,6 +71,25 @@ def test_native_platform_sessions_are_skipped(push, sender):
     assert sender.events == []
 
 
+def test_cron_turns_push_nothing_not_even_silent_replies(push, sender):
+    # Hermes 0.22+ cron session: id is "local-<hash>", platform is "cron". A job whose final
+    # message is exactly [SILENT] still ends a turn, and that turn must not reach the phone.
+    run_turn(push, session_id="local-1f7a8d60", platform="cron", reply="[SILENT]")
+    assert sender.events == []
+
+
+def test_failed_cron_turn_still_pushes_turn_error(push, sender, keys):
+    push.pre_llm_call(session_id="local-1f7a8d60", platform="cron")
+    push.on_session_end(session_id="local-1f7a8d60", completed=False, interrupted=False, failed=True,
+                        turn_id="t", turn_exit_reason="probe failed", platform="cron")
+    events = notifications(sender)
+    assert len(events) == 1 and events[0]["kind"] == "turn_error"
+    inner = unseal(events[0]["sealed"], preview_key=keys.preview_key, install_key=keys.install_key)
+    assert inner["body"] == "probe failed"
+    # Progress stays suppressed on automation sessions, even when the turn fails.
+    assert [e for _, e in sender.events if e["kind"] == "progress"] == []
+
+
 def test_clarify_and_approval_push_and_mark_waiting(push, sender, keys):
     push.pre_llm_call(session_id="s", platform="desktop")
     push.pre_tool_call(tool_name="clarify", args={"questions": [{"question": "Which branch?", "choices": ["main", "dev"]}]},
